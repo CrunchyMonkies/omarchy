@@ -113,12 +113,22 @@ cleanup() {
 staging=$(mktemp -d)
 trap cleanup EXIT
 
+# Debian bookworm rather than Arch, which is the one place in this repo that
+# is deliberately not Arch. Linux 6.6 is from late 2023 and its in-tree tools/
+# build compiles with -Werror, so a current GCC fails it on warnings that did
+# not exist when the tree was written — Arch's GCC 15 stops at
+# "libbpf.c: assignment discards 'const' qualifier". Bookworm's GCC 12 is
+# contemporaneous with 6.6 and is what the upstream WSL kernel build assumes.
+# This is a throwaway build container; nothing from it reaches the image.
 cat >"$staging/Dockerfile" <<'DOCKERFILE'
-FROM archlinux:base-devel
+FROM debian:bookworm
 
-RUN pacman -Sy --noconfirm --needed \
-      git bc flex bison cpio perl tar xz \
-      libelf pahole openssl python
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential git bc flex bison cpio kmod rsync \
+      libssl-dev libelf-dev libncurses-dev dwarves \
+      python3 xz-utils zstd ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY build.sh /build.sh
 RUN chmod +x /build.sh
