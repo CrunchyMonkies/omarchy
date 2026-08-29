@@ -27,6 +27,14 @@ output=""
 dev_link=1
 keep_container=0
 
+# Installing the full package set pins every core it is given for a long
+# stretch. Cap the container at half the machine so the host stays usable while
+# a build runs.
+docker_cpus=$(( $(nproc) / 2 ))
+(( docker_cpus > 0 )) || docker_cpus=1
+docker_memory_gb=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 / 1024 / 2 }' /proc/meminfo)
+(( docker_memory_gb > 2 )) || docker_memory_gb=2
+
 usage() {
   cat <<USAGE
 Usage: omarchy dev wsl build [--output PATH] [--no-dev-link] [--base URL] [--keep-container]
@@ -43,6 +51,9 @@ startx inside it brings up the Hyprland session in a WSLg window.
                      this checkout at /usr/local/share/omarchy
   --base URL         a different Arch WSL rootfs (default: $DEFAULT_BASE_URL)
   --keep-container   leave the build container around for inspection
+
+The build container is capped at half this machine: $docker_cpus of $(nproc) CPUs and
+${docker_memory_gb}G of memory.
 
 Import on Windows with:
   wsl --install --from-file <path>
@@ -241,9 +252,11 @@ fi
 echo "Importing the base rootfs into Docker"
 docker import "$base_file" "$BASE_IMAGE" >/dev/null
 
-echo "Provisioning the image"
+echo "Provisioning the image on $docker_cpus CPUs with ${docker_memory_gb}G"
 docker run \
   --name "$CONTAINER" \
+  --cpus "$docker_cpus" \
+  --memory "${docker_memory_gb}g" \
   --volume "$OMARCHY_SRC:/mnt/omarchy-src:ro" \
   --volume "$staging:/mnt/omarchy-build:ro" \
   "$BASE_IMAGE" \

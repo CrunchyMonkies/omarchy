@@ -12,6 +12,8 @@ omarchy dev wsl build --output ~/omarchy.wsl
 
 Everything runs inside Docker, so the command needs no root on the host and cannot touch the host system. It downloads the official rootfs from `https://geo.mirror.pkgbuild.com/wsl/latest/archlinux.wsl` (cached under `$XDG_CACHE_HOME/omarchy/wsl`, verified against the published `.SHA256`), imports it into a scratch Docker image, provisions it, and repacks the result.
 
+The build container is capped at half the machine — half the CPUs and half the memory — so a build does not make the host unusable while it runs. `--help` prints the numbers it resolved for the machine you are on.
+
 By default the checkout is copied to `/usr/local/share/omarchy` and `/etc/omarchy.conf` points `OMARCHY_PATH` at it — the same overlay `omarchy-dev-link` sets up, so the image runs the code you are editing. `--no-dev-link` leaves the released `/usr/share/omarchy` in place instead.
 
 The released `omarchy` and `omarchy-settings` packages are installed either way. They ship the files at fixed system paths that `OMARCHY_PATH` does not cover: `/etc/skel`, the systemd units, `/usr/share/uwsm/env.d/10-omarchy`.
@@ -98,7 +100,7 @@ To get a render node, build a WSL2 kernel carrying the community [dxgkrnl DRM pa
 omarchy dev wsl kernel --output ~/bzImage
 ```
 
-That builds `microsoft/WSL2-Linux-Kernel` at `linux-msft-wsl-6.6.y` with the patches applied, in Docker, seeding `.config` from the running WSL kernel when there is one. It installs nothing and changes no Windows configuration — it prints the `.wslconfig` snippet to apply by hand:
+That builds `microsoft/WSL2-Linux-Kernel` at `linux-msft-wsl-6.6.y` with the patches applied, in Docker, seeding `.config` from the running WSL kernel when there is one. Like the image build it is capped at half the machine, and `--jobs` defaults to match that cap rather than to `nproc`: `--cpus` is a CFS quota, so a container still *sees* every core and an unmatched `make -j` would oversubscribe the quota it has been given. It installs nothing and changes no Windows configuration — it prints the `.wslconfig` snippet to apply by hand:
 
 ```ini
 [wsl2]
