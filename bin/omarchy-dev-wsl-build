@@ -1,0 +1,273 @@
+#!/bin/bash
+
+# omarchy:summary=Build an importable Omarchy WSL image from this checkout
+# omarchy:group=dev
+# omarchy:args=[--output PATH] [--no-dev-link] [--base URL] [--keep-container]
+# omarchy:examples=omarchy dev wsl build --output ~/omarchy.wsl
+
+set -euo pipefail
+
+# Everything happens inside a Docker container built from the official Arch WSL
+# rootfs, so this needs no root on the host and cannot touch the host system.
+# docs/wsl.md covers what the resulting image contains and how to import it.
+
+OMARCHY_SRC=$(cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)
+
+# The host may not be an Omarchy machine, so the checkout's own helpers have to
+# be reachable before anything calls omarchy-cmd-present.
+export PATH="$OMARCHY_SRC/bin:$PATH"
+
+DEFAULT_BASE_URL="https://geo.mirror.pkgbuild.com/wsl/latest/archlinux.wsl"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/wsl"
+CONTAINER="omarchy-wsl-build-$$"
+BASE_IMAGE="omarchy-wsl-base:$$"
+
+base_url="$DEFAULT_BASE_URL"
+output=""
+dev_link=1
+keep_container=0
+
+usage() {
+  cat <<USAGE
+Usage: omarchy dev wsl build [--output PATH] [--no-dev-link] [--base URL] [--keep-container]
+
+Builds an Omarchy WSL image from this checkout, on top of the official Arch
+Linux WSL rootfs. Writes omarchy-<date>.wsl in the current directory unless
+--output says otherwise.
+
+The image boots to a shell — the desktop never starts on its own. Running
+startx inside it brings up the Hyprland session in a WSLg window.
+
+  --output PATH      where to write the .wsl image
+  --no-dev-link      ship the released /usr/share/omarchy instead of overlaying
+                     this checkout at /usr/local/share/omarchy
+  --base URL         a different Arch WSL rootfs (default: $DEFAULT_BASE_URL)
+  --keep-container   leave the build container around for inspection
+
+Import on Windows with:
+  wsl --install --from-file <path>
+USAGE
+}
+
+while (($#)); do
+  case "$1" in
+    --output)
+      output="${2:-}"
+      shift 2
+      ;;
+    --no-dev-link)
+      dev_link=0
+      shift
+      ;;
+    --base)
+      base_url="${2:-}"
+      shift 2
+      ;;
+    --keep-container)
+      keep_container=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if omarchy-cmd-missing docker; then
+  echo "Error: docker is required to build a WSL image." >&2
+  exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  echo "Error: cannot talk to the Docker daemon." >&2
+  echo "Start it (or add yourself to the docker group) and try again." >&2
+  exit 1
+fi
+
+if [[ -z $output ]]; then
+  output="$PWD/omarchy-$(date +%Y.%m.%d).wsl"
+fi
+
+output=$(realpath -m "$output")
+output_dir=$(dirname "$output")
+
+if [[ ! -d $output_dir ]]; then
+  echo "Error: output directory does not exist: $output_dir" >&2
+  exit 1
+fi
+
+cleanup() {
+  if (( keep_container )); then
+    echo "Leaving container $CONTAINER in place (--keep-container)."
+  else
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  fi
+  docker rmi -f "$BASE_IMAGE" >/dev/null 2>&1 || true
+  rm -rf "$staging"
+}
+
+staging=$(mktemp -d)
+trap cleanup EXIT
+
+# ---------------------------------------------------------------- base rootfs
+
+mkdir -p "$CACHE_DIR"
+base_name=$(basename "$base_url")
+base_file="$CACHE_DIR/$base_name"
+checksum_file="$CACHE_DIR/$base_name.SHA256"
+
+echo "Fetching checksum for $base_name"
+curl -fsSL --retry 3 -o "$checksum_file" "$base_url.SHA256"
+
+# The published checksum names the file, so verify from the cache directory and
+# let sha256sum do the comparison rather than reimplementing it.
+base_is_current() {
+  [[ -f $base_file ]] && (cd "$CACHE_DIR" && sha256sum --status -c "$base_name.SHA256")
+}
+
+if base_is_current; then
+  echo "Using cached $base_file"
+else
+  echo "Downloading $base_url"
+  curl -fL --retry 3 -o "$base_file" "$base_url"
+
+  if ! base_is_current; then
+    echo "Error: checksum mismatch on $base_file" >&2
+    exit 1
+  fi
+fi
+
+# ------------------------------------------------------------------ provision
+
+# Written to a file rather than passed as an argument so the quoting stays
+# readable and the script is inspectable with --keep-container.
+cat >"$staging/provision.sh" <<'PROVISION'
+#!/bin/bash
+
+set -euo pipefail
+
+SRC=/mnt/omarchy-src
+DEV_LINK_PATH=/usr/local/share/omarchy
+OMARCHY_SIGNING_KEY=40DFB630FF42BCFFB047046CF0134EE680CAC571
+
+step() { printf '\n\033[32m==> %s\033[0m\n' "$1"; }
+
+step "Initializing the pacman keyring"
+# The official Arch WSL image deletes its keyring on purpose and rebuilds it in
+# its own OOBE hook, which we replace — so rebuild it here instead.
+pacman-key --init
+pacman-key --populate archlinux
+
+step "Pointing pacman at the Omarchy repositories"
+cp -f "$SRC/default/pacman/pacman-stable.conf" /etc/pacman.conf
+cp -f "$SRC/default/pacman/mirrorlist-stable" /etc/pacman.d/mirrorlist
+
+step "Trusting the Omarchy signing key"
+# Same key and keyserver as omarchy-update-keyring, which cannot run yet
+# because the omarchy package is not installed.
+pacman-key --recv-keys "$OMARCHY_SIGNING_KEY" --keyserver keys.openpgp.org
+pacman-key --lsign-key "$OMARCHY_SIGNING_KEY"
+
+pacman -Sy --noconfirm
+pacman -S --noconfirm --needed archlinux-keyring omarchy-keyring
+pacman -Sy --noconfirm
+
+step "Installing the Omarchy runtime"
+# Needed even when overlaying a checkout: these ship the files at fixed system
+# paths (/etc/skel, systemd units, /usr/share/uwsm/env.d) that OMARCHY_PATH
+# does not cover.
+pacman -S --noconfirm --needed omarchy omarchy-settings
+
+if [[ -f /mnt/omarchy-build/dev-link ]]; then
+  step "Overlaying this checkout at $DEV_LINK_PATH"
+  # The same two files omarchy-dev-link writes, minus its reboot prompt: the
+  # image has never booted, so there is nothing running to disagree with.
+  mkdir -p "$DEV_LINK_PATH"
+  cp -a "$SRC/." "$DEV_LINK_PATH/"
+  rm -rf "$DEV_LINK_PATH/.git"
+
+  printf 'export OMARCHY_PATH="%s"\n' "$DEV_LINK_PATH" >/etc/omarchy.conf
+  chmod 644 /etc/omarchy.conf
+
+  printf 'Defaults secure_path="%s"\n' \
+    "$DEV_LINK_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/bin" \
+    >/tmp/omarchy-dev-path
+  visudo -cf /tmp/omarchy-dev-path >/dev/null
+  install -Dm440 -o root -g root /tmp/omarchy-dev-path /etc/sudoers.d/omarchy-dev-path
+  rm -f /tmp/omarchy-dev-path
+
+  export OMARCHY_PATH="$DEV_LINK_PATH"
+else
+  export OMARCHY_PATH=/usr/share/omarchy
+fi
+
+step "Applying Omarchy system setup"
+export PATH="$OMARCHY_PATH/bin:$PATH"
+omarchy-apply-wsl --first-install
+
+step "Cleaning up for distribution"
+# Microsoft's rules for a distributable image: no resolv.conf, no kernel or
+# initramfs, and no password hashes in /etc/shadow.
+pacman -Scc --noconfirm >/dev/null
+rm -rf /var/lib/pacman/sync/*
+rm -rf /var/log/journal/*
+find /var/log -type f -delete
+rm -f /root/.bash_history
+
+# systemd regenerates a machine id on first boot from an empty file. Leaving
+# the build container's id behind would give every import the same one.
+: >/etc/machine-id
+
+if awk -F: '$2 ~ /^\$/ { found = 1 } END { exit !found }' /etc/shadow; then
+  echo "Error: /etc/shadow carries password hashes; WSL images must not." >&2
+  exit 1
+fi
+
+step "Image provisioned"
+PROVISION
+
+chmod +x "$staging/provision.sh"
+
+if (( dev_link )); then
+  touch "$staging/dev-link"
+fi
+
+echo "Importing the base rootfs into Docker"
+docker import "$base_file" "$BASE_IMAGE" >/dev/null
+
+echo "Provisioning the image"
+docker run \
+  --name "$CONTAINER" \
+  --volume "$OMARCHY_SRC:/mnt/omarchy-src:ro" \
+  --volume "$staging:/mnt/omarchy-build:ro" \
+  "$BASE_IMAGE" \
+  /bin/bash /mnt/omarchy-build/provision.sh
+
+# ---------------------------------------------------------------------- repack
+
+echo "Packing $output"
+
+# Gzip, not zstd: WSL1 unpacks images with a bsdtar that cannot read zstd, and
+# Microsoft rejected zstd for the official Arch image for exactly that reason.
+#
+# Docker synthesizes these four entries in every container and they must not
+# reach the image — WSL writes /etc/resolv.conf itself, and Microsoft's spec
+# requires the archive not carry one.
+docker export "$CONTAINER" \
+  | tar --delete -f - .dockerenv etc/resolv.conf etc/hosts etc/hostname \
+  | gzip --best >"$output"
+
+echo
+echo "Built $output ($(du -h "$output" | cut -f1))"
+echo
+echo "Import it on Windows with:"
+echo "  wsl --install --from-file <path-to-the-image>"
+echo
+echo "The desktop does not start on its own. Run 'startx' inside the"
+echo "distribution to bring up the Omarchy session in a WSLg window."

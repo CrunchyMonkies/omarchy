@@ -1,0 +1,216 @@
+#!/bin/bash
+
+# omarchy:summary=Build a WSL2 kernel that exposes a DRM render node
+# omarchy:group=dev
+# omarchy:args=[--output PATH] [--branch REF] [--jobs N]
+# omarchy:examples=omarchy dev wsl kernel --output ~/bzImage
+
+set -euo pipefail
+
+# Hyprland allocates its buffers through GBM, which needs a DRM render node —
+# even nested inside another compositor, which is how it runs on WSLg. Stock
+# WSL2 kernels expose Microsoft's /dev/dxg and no DRM device at all, so the
+# Omarchy session cannot start on one.
+#
+# This is a thin wrapper around the upstream instructions for the community
+# patches that register dxgkrnl adapters with the DRM subsystem. It is a
+# workaround for a WSL limitation, not something Omarchy owns, so it stays a
+# build-and-hand-over: it never installs anything or touches Windows config.
+
+KERNEL_REPO="https://github.com/microsoft/WSL2-Linux-Kernel.git"
+PATCH_REPO="https://github.com/0deep/wsl-dxgkrnl-drm-patches.git"
+BUILD_IMAGE="omarchy-wsl-kernel-build:$$"
+CONTAINER="omarchy-wsl-kernel-$$"
+
+branch="linux-msft-wsl-6.6.y"
+output=""
+jobs=$(nproc)
+
+usage() {
+  cat <<USAGE
+Usage: omarchy dev wsl kernel [--output PATH] [--branch REF] [--jobs N]
+
+Builds a WSL2 kernel carrying the dxgkrnl DRM patches, so /dev/dri/renderD128
+exists and 'startx' can bring up the Omarchy session inside WSLg. Writes
+bzImage in the current directory unless --output says otherwise.
+
+  --output PATH   where to write the built bzImage
+  --branch REF    WSL2-Linux-Kernel branch or tag (default: $branch)
+  --jobs N        parallel make jobs (default: $jobs)
+
+Nothing is installed and no Windows configuration is changed; the command
+prints the .wslconfig snippet to apply by hand when it finishes.
+USAGE
+}
+
+while (($#)); do
+  case "$1" in
+    --output)
+      output="${2:-}"
+      shift 2
+      ;;
+    --branch)
+      branch="${2:-}"
+      shift 2
+      ;;
+    --jobs)
+      jobs="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+OMARCHY_SRC=$(cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)
+export PATH="$OMARCHY_SRC/bin:$PATH"
+
+if omarchy-cmd-missing docker; then
+  echo "Error: docker is required to build the kernel." >&2
+  exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  echo "Error: cannot talk to the Docker daemon." >&2
+  exit 1
+fi
+
+if [[ -z $output ]]; then
+  output="$PWD/bzImage"
+fi
+
+output=$(realpath -m "$output")
+
+if [[ ! -d $(dirname "$output") ]]; then
+  echo "Error: output directory does not exist: $(dirname "$output")" >&2
+  exit 1
+fi
+
+cleanup() {
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  docker rmi -f "$BUILD_IMAGE" >/dev/null 2>&1 || true
+  rm -rf "$staging"
+}
+
+staging=$(mktemp -d)
+trap cleanup EXIT
+
+cat >"$staging/Dockerfile" <<'DOCKERFILE'
+FROM archlinux:base-devel
+
+RUN pacman -Sy --noconfirm --needed \
+      git bc flex bison cpio perl tar xz \
+      libelf pahole openssl python
+
+COPY build.sh /build.sh
+RUN chmod +x /build.sh
+DOCKERFILE
+
+cat >"$staging/build.sh" <<'BUILD'
+#!/bin/bash
+
+set -euo pipefail
+
+step() { printf '\n\033[32m==> %s\033[0m\n' "$1"; }
+
+step "Cloning the WSL2 kernel ($KERNEL_BRANCH)"
+git clone --depth 1 --branch "$KERNEL_BRANCH" "$KERNEL_REPO" /kernel
+git clone --depth 1 "$PATCH_REPO" /patches
+
+step "Applying the dxgkrnl DRM patches"
+/patches/scripts/apply-patches.sh /kernel
+
+cd /kernel
+
+step "Configuring"
+# Seed from the running WSL kernel when there is one — it keeps every Hyper-V
+# and dxgkrnl option the host already depends on, and the patches only add to
+# it. Docker containers share the host kernel, so /proc/config.gz here is the
+# same config the distribution is running under.
+if [[ -r /proc/config.gz ]] && zcat /proc/config.gz | grep -q CONFIG_DXGKRNL; then
+  echo "Seeding .config from the running WSL kernel"
+  zcat /proc/config.gz >.config
+else
+  echo "Seeding .config from Microsoft/config-wsl"
+  cp Microsoft/config-wsl .config
+fi
+
+# The DRM device the patches register is the whole point, and dxgkrnl is built
+# in, so the helpers it links against have to be built in too rather than left
+# as modules.
+cat >>.config <<'FRAGMENT'
+CONFIG_DRM=y
+CONFIG_DRM_GEM_SHMEM_HELPER=y
+CONFIG_DXGKRNL=y
+FRAGMENT
+
+make olddefconfig
+
+for option in CONFIG_DRM=y CONFIG_DXGKRNL=y; do
+  if ! grep -qx "$option" .config; then
+    echo "Error: $option did not survive olddefconfig; the kernel would have no DRM node." >&2
+    exit 1
+  fi
+done
+
+step "Building with $KERNEL_JOBS jobs (this takes a while)"
+make "-j$KERNEL_JOBS"
+
+install -Dm644 arch/x86/boot/bzImage /out/bzImage
+
+step "Built /out/bzImage"
+BUILD
+
+echo "Building the kernel build image"
+docker build --quiet --tag "$BUILD_IMAGE" "$staging" >/dev/null
+
+echo "Building the kernel"
+docker run \
+  --name "$CONTAINER" \
+  --env "KERNEL_REPO=$KERNEL_REPO" \
+  --env "PATCH_REPO=$PATCH_REPO" \
+  --env "KERNEL_BRANCH=$branch" \
+  --env "KERNEL_JOBS=$jobs" \
+  "$BUILD_IMAGE" \
+  /build.sh
+
+docker cp "$CONTAINER:/out/bzImage" "$output"
+
+# Best effort: on a WSL host the Windows profile is right there, so name the
+# real path instead of a placeholder the user has to translate.
+windows_profile=""
+if [[ -d /mnt/c/Users ]] && omarchy-cmd-present cmd.exe; then
+  windows_profile=$(cmd.exe /c "echo %USERPROFILE%" 2>/dev/null | tr -d '\r\n')
+fi
+
+cat <<NOTE
+
+Built $output
+
+To use it:
+
+  1. Copy it somewhere Windows can read, e.g.
+       cp "$output" /mnt/c/Users/<you>/bzImage
+
+  2. Add this to ${windows_profile:-C:\\Users\\<you>}\\.wslconfig
+
+       [wsl2]
+       kernel=${windows_profile:-C:\\Users\\<you>}\\bzImage
+
+  3. From Windows (not from inside WSL, it ends every distribution):
+
+       wsl --shutdown
+
+  4. Start the distribution again and confirm the node arrived:
+
+       ls /dev/dri/renderD128
+       startx --diagnose
+
+NOTE

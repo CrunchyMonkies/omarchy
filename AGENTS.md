@@ -96,6 +96,13 @@ Exceptions are allowed for migration and package-helper scripts where the helper
 - Do not add `aliases` to new menu entries. Aliases are reserved for
   established alternate names users already type, kept for compatibility.
 
+# WSL
+
+- Omarchy can be built into an importable WSL image; [`docs/wsl.md`](docs/wsl.md) covers the build, what
+  the image skips and why, and the DRM render node the desktop needs.
+- `install/wsl/` is a parallel step list to `install/config/`, not a variant of it. Keep WSL knowledge
+  there rather than adding guards to shared leaves.
+
 # Config Structure
 
 - `config/` - default configs copied to `~/.config/`

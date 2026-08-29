@@ -1,0 +1,150 @@
+#!/bin/bash
+
+# omarchy:summary=Start the Omarchy desktop in a WSLg window
+# omarchy:group=launch
+# omarchy:args=[--diagnose]
+# omarchy:examples=startx
+# omarchy:hidden=true
+
+set -uo pipefail
+
+# This is what `startx` runs on a WSL image (install/wsl/wslg.sh installs the
+# shim). WSL never starts the desktop on its own, so this is the only way in.
+
+RENDER_NODE=/dev/dri/renderD128
+
+usage() {
+  cat <<USAGE
+Usage: startx [--diagnose]
+       omarchy launch wsl session [--diagnose]
+
+Starts the Omarchy Hyprland session as a window on the Windows desktop,
+through WSLg. There is no X server involved despite the name — startx is
+just where people reach for a desktop from a WSL shell.
+
+--diagnose reports what the session needs and what this machine has,
+without starting anything.
+USAGE
+}
+
+diagnose_only=0
+
+while (($#)); do
+  case "$1" in
+    --diagnose)
+      diagnose_only=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+# WSLg publishes the compositor sockets here. Without it there is no display
+# to render into and nothing below can work.
+wslg_present() {
+  [[ -d /mnt/wslg ]]
+}
+
+# Hyprland's backend (aquamarine) allocates its buffers through GBM, which
+# needs a DRM render node even when it is nesting inside another compositor.
+# Stock WSL2 kernels expose /dev/dxg and no DRM device at all.
+render_node_present() {
+  [[ -e $RENDER_NODE ]]
+}
+
+session_running() {
+  pgrep -x Hyprland >/dev/null 2>&1
+}
+
+diagnose() {
+  echo "Omarchy WSL session diagnostics"
+  echo
+  echo "  kernel:      $(uname -r)"
+  echo "  WSLg:        $(wslg_present && echo "present at /mnt/wslg" || echo "MISSING")"
+  echo "  render node: $(render_node_present && echo "$RENDER_NODE" || echo "MISSING")"
+  echo "  session:     $(session_running && echo "Hyprland already running" || echo "not running")"
+  echo
+
+  if ! wslg_present; then
+    cat <<'NOTE'
+WSLg is not available in this distribution. Individual GUI apps and the
+desktop both need it. Check that the Windows host is on WSL 2 with WSLg
+enabled (wsl --version), and that /etc/wsl.conf has not disabled interop.
+NOTE
+  elif ! render_node_present; then
+    cat <<NOTE
+No DRM render node. Stock WSL2 kernels ship /dev/dxg and no DRM device, so
+Hyprland cannot allocate buffers and the session will not start. Individual
+GUI apps still work over WSLg — this only blocks the full desktop.
+
+To get one, build a WSL2 kernel carrying the dxgkrnl DRM patches:
+
+  omarchy dev wsl kernel
+
+then point Windows at the bzImage it produces (it prints the .wslconfig
+snippet) and run 'wsl --shutdown' to pick it up.
+NOTE
+  else
+    echo "Everything the session needs is present. Run startx."
+  fi
+}
+
+if (( diagnose_only )); then
+  diagnose
+  exit 0
+fi
+
+if ! wslg_present; then
+  echo "Error: /mnt/wslg not found — this is not a WSLg-capable WSL distribution." >&2
+  echo "Run 'startx --diagnose' for details." >&2
+  exit 1
+fi
+
+if session_running; then
+  echo "Error: a Hyprland session is already running." >&2
+  echo "Close it (or 'omarchy system logout') before starting another." >&2
+  exit 1
+fi
+
+# vgem is the one DRM module a stock WSL2 kernel builds, and loading it is
+# free. It does not give aquamarine a usable GPU, but a kernel that has the
+# dxgkrnl DRM patches may only need the module pulled in.
+if ! render_node_present; then
+  modprobe vgem 2>/dev/null
+fi
+
+if ! render_node_present; then
+  echo "Error: no DRM render node at $RENDER_NODE, so Hyprland cannot start." >&2
+  echo >&2
+  diagnose >&2
+  exit 1
+fi
+
+# WSLg's sockets, in case this was reached from a shell that did not read
+# /etc/profile.d/omarchy-wslg.sh (systemd units, ssh, wsl -d ... command).
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/mnt/wslg/runtime-dir}"
+export DISPLAY="${DISPLAY:-:0}"
+export PULSE_SERVER="${PULSE_SERVER:-unix:/mnt/wslg/PulseServer}"
+
+# Nest inside WSLg's Weston instead of looking for a DRM device to modeset on:
+# WSLg owns the display, and the dxgkrnl node is render-only either way.
+export AQ_FORCE_BACKEND=wayland
+export AQ_NO_MODIFIERS=1
+export WLR_RENDERER_ALLOW_SOFTWARE=1
+export XDG_CURRENT_DESKTOP=Hyprland
+export XDG_SESSION_TYPE=wayland
+
+# The exact line from default/wayland-sessions/omarchy.desktop, which is what
+# SDDM runs on hardware. Going through uwsm is what sources
+# /usr/share/uwsm/env.d/10-omarchy (hence OMARCHY_PATH) and lets
+# default/hypr/autostart.lua bring up the shell and first-run provisioning.
+exec uwsm start -g -1 -e -D Hyprland hyprland.desktop
