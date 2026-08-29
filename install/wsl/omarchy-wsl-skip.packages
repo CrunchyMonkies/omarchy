@@ -1,0 +1,52 @@
+# Packages from install/omarchy-base.packages that WSL cannot use.
+# install/wsl/packages.sh subtracts this list from the base manifest, so a
+# package added to the base list reaches WSL by default. Every entry here must
+# exist in the base list; test/shell.d/wsl-image-test.sh enforces that.
+
+# The display manager is the only thing that ever starts the compositor, and on
+# WSL the desktop must never come up on its own. startx is the way in.
+sddm
+
+# Boot splash for a bootloader WSL does not have.
+plymouth
+
+# No Bluetooth controller is passed through to the WSL VM.
+bluez
+bluez-tools
+bluez-utils
+
+# Printing and mDNS belong to Windows on this machine.
+cups
+cups-browsed
+cups-filters
+cups-pdf
+system-config-printer
+avahi
+nss-mdns
+
+# WSL networking is NAT'd by the Windows host; a guest firewall filters nothing
+# and ufw-docker rewrites rules for a daemon that is not here.
+ufw
+ufw-docker
+
+# Docker Desktop already integrates with WSL, and running a second daemon
+# inside the image fights it for the same sockets.
+docker
+docker-buildx
+docker-compose
+lazydocker
+
+# No battery, no ACPI platform profile, no backlight, no DDC/CI, no Thunderbolt.
+power-profiles-daemon
+brightnessctl
+ddcutil
+asdcontrol
+bolt
+
+# The kernel comes from Windows; the image owns no modules to clean up, and the
+# regulatory database applies to radios WSL does not expose.
+kernel-modules-hook
+wireless-regdb
+
+# WSL syncs the clock with the Windows host.
+tzupdate

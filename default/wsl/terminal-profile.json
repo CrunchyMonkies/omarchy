@@ -1,0 +1,41 @@
+{
+  "profiles": [
+    {
+      "name": "Omarchy",
+      "commandline": "wsl.exe -d Omarchy",
+      "startingDirectory": "~",
+      "colorScheme": "Omarchy Tokyo Night",
+      "font": {
+        "face": "CaskaydiaMono Nerd Font",
+        "size": 11
+      },
+      "cursorShape": "filledBox",
+      "padding": "12"
+    }
+  ],
+  "schemes": [
+    {
+      "name": "Omarchy Tokyo Night",
+      "background": "#1A1B26",
+      "foreground": "#A9B1D6",
+      "cursorColor": "#C0CAF5",
+      "selectionBackground": "#292E42",
+      "black": "#414868",
+      "red": "#F7768E",
+      "green": "#9ECE6A",
+      "yellow": "#E0AF68",
+      "blue": "#7AA2F7",
+      "purple": "#AD8EE6",
+      "cyan": "#449DAB",
+      "white": "#A9B1D6",
+      "brightBlack": "#565F89",
+      "brightRed": "#FF7A93",
+      "brightGreen": "#B9F27C",
+      "brightYellow": "#FF9E64",
+      "brightBlue": "#7DA6FF",
+      "brightPurple": "#BB9AF7",
+      "brightCyan": "#0DB9D7",
+      "brightWhite": "#C0CAF5"
+    }
+  ]
+}
