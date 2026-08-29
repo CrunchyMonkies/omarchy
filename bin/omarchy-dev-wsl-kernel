@@ -22,9 +22,17 @@ PATCH_REPO="https://github.com/0deep/wsl-dxgkrnl-drm-patches.git"
 BUILD_IMAGE="omarchy-wsl-kernel-build:$$"
 CONTAINER="omarchy-wsl-kernel-$$"
 
+# A kernel build will take everything it is given. Cap the container at half
+# the machine so the host stays usable for the hours this can run, and default
+# make to the same number so it does not oversubscribe the quota it has.
+docker_cpus=$(( $(nproc) / 2 ))
+(( docker_cpus > 0 )) || docker_cpus=1
+docker_memory_gb=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 / 1024 / 2 }' /proc/meminfo)
+(( docker_memory_gb > 2 )) || docker_memory_gb=2
+
 branch="linux-msft-wsl-6.6.y"
 output=""
-jobs=$(nproc)
+jobs=$docker_cpus
 
 usage() {
   cat <<USAGE
@@ -37,6 +45,9 @@ bzImage in the current directory unless --output says otherwise.
   --output PATH   where to write the built bzImage
   --branch REF    WSL2-Linux-Kernel branch or tag (default: $branch)
   --jobs N        parallel make jobs (default: $jobs)
+
+The build container is capped at half this machine: $docker_cpus of $(nproc) CPUs and
+${docker_memory_gb}G of memory.
 
 Nothing is installed and no Windows configuration is changed; the command
 prints the .wslconfig snippet to apply by hand when it finishes.
@@ -171,9 +182,11 @@ BUILD
 echo "Building the kernel build image"
 docker build --quiet --tag "$BUILD_IMAGE" "$staging" >/dev/null
 
-echo "Building the kernel"
+echo "Building the kernel on $docker_cpus CPUs with ${docker_memory_gb}G"
 docker run \
   --name "$CONTAINER" \
+  --cpus "$docker_cpus" \
+  --memory "${docker_memory_gb}g" \
   --env "KERNEL_REPO=$KERNEL_REPO" \
   --env "PATCH_REPO=$PATCH_REPO" \
   --env "KERNEL_BRANCH=$branch" \
