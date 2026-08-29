@@ -100,7 +100,11 @@ To get a render node, build a WSL2 kernel carrying the community [dxgkrnl DRM pa
 omarchy dev wsl kernel --output ~/bzImage
 ```
 
-That builds `microsoft/WSL2-Linux-Kernel` at `linux-msft-wsl-6.6.y` with the patches applied, in Docker, seeding `.config` from the running WSL kernel when there is one. Like the image build it is capped at half the machine, and `--jobs` defaults to match that cap rather than to `nproc`: `--cpus` is a CFS quota, so a container still *sees* every core and an unmatched `make -j` would oversubscribe the quota it has been given. It installs nothing and changes no Windows configuration — it prints the `.wslconfig` snippet to apply by hand:
+That builds `microsoft/WSL2-Linux-Kernel` at `linux-msft-wsl-6.6.y` with the patches applied, in Docker, seeding `.config` from the running WSL kernel when there is one. Like the image build it is capped at half the machine, and `--jobs` defaults to match that cap rather than to `nproc`: `--cpus` is a CFS quota, so a container still *sees* every core and an unmatched `make -j` would oversubscribe the quota it has been given.
+
+The kernel build container is Debian bookworm, the one place in this repo that is deliberately not Arch. Linux 6.6 is from late 2023 and its in-tree `tools/` build compiles with `-Werror`, so a current compiler fails it on warnings that did not exist when the tree was written — Arch's GCC 15 stops at `libbpf.c: assignment discards 'const' qualifier`. Bookworm's GCC 12 is contemporaneous with 6.6. Nothing from that container reaches the image.
+
+The command installs nothing and changes no Windows configuration — it prints the `.wslconfig` snippet to apply by hand:
 
 ```ini
 [wsl2]
