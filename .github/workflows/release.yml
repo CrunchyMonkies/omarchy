@@ -174,7 +174,9 @@ jobs:
         env:
           TAG: ${{ steps.release.outputs.tag }}
           REF: ${{ steps.release.outputs.ref }}
-        run: git archive --format=tar.gz --prefix="omarchy-$TAG/" "$REF" -o "dist/omarchy-$TAG.tar.gz"
+        run: |
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="omarchy-$TAG/" "$REF" -o "dist/omarchy-$TAG.tar.gz"
 
       - name: Stage the Windows installer
         run: cp install/wsl/windows/Install-Omarchy.ps1 dist/
