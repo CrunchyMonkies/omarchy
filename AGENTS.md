@@ -99,7 +99,7 @@ Exceptions are allowed for migration and package-helper scripts where the helper
 # WSL
 
 - Omarchy can be built into an importable WSL image; [`docs/wsl.md`](docs/wsl.md) covers the build, what
-  the image skips and why, and the DRM render node the desktop needs.
+  the image skips and why, and the DRM device the desktop needs.
 - `install/wsl/` is a parallel step list to `install/config/`, not a variant of it. Keep WSL knowledge
   there rather than adding guards to shared leaves.
 
