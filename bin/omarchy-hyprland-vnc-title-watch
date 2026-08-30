@@ -45,23 +45,48 @@ desktop_name() {
   fi
 }
 
+# The shortest gap between two name changes reaching the client. An editor
+# retitles on every keystroke -- VS Code toggles its modified marker -- and
+# neatvnc spends a client's pending framebuffer request to deliver a name
+# update, so an unthrottled watcher takes those requests away from pixels. Left
+# to chase every event it costs about 40% of the throughput to the viewer,
+# measured against a window that repaints and retitles the way an editor does.
+MIN_INTERVAL=1
+
 # What wayvnc was started with, so the first focus does not re-send it.
 last_name="$BASE_NAME"
+last_sent=0
+dirty=0
 
-while IFS= read -r event; do
-  case "$event" in
-    # activewindow carries the title itself, but a title that changes while the
-    # window keeps focus arrives as windowtitle against an address instead --
-    # matching that to the focused window means tracking activewindowv2 as
-    # well. Asking Hyprland which window is active is shorter and always right.
-    activewindow\>\>*|windowtitle\>\>*|windowtitlev2\>\>*|closewindow\>\>*) ;;
-    *) continue ;;
-  esac
+while true; do
+  # The timeout is the clock: it flushes a rename that arrived during the
+  # quiet period, so the title still settles on the last one after typing stops.
+  IFS= read -r -t "$MIN_INTERVAL" event
+  status=$?
+
+  if ((status == 0)); then
+    case "$event" in
+      # activewindow carries the title itself, but a title that changes while
+      # the window keeps focus arrives as windowtitle against an address
+      # instead -- matching that to the focused window means tracking
+      # activewindowv2 as well. Asking Hyprland which window is active is
+      # shorter and always right, and only happens when a flush is due.
+      activewindow\>\>*|windowtitle\>\>*|windowtitlev2\>\>*|closewindow\>\>*)
+        dirty=1
+        ;;
+    esac
+  elif ((status <= 128)); then
+    # Not a timeout: the compositor closed the event socket.
+    break
+  fi
+
+  ((dirty)) || continue
+  ((SECONDS - last_sent < MIN_INTERVAL)) && continue
 
   name=$(desktop_name)
+  dirty=0
+  last_sent=$SECONDS
 
-  # A terminal retitles on every command; without this each one is an IPC round
-  # trip and a framebuffer update to every connected client.
   [[ $name == "$last_name" ]] && continue
   last_name=$name
 
