@@ -11,6 +11,17 @@
 
 set -euo pipefail
 
+# Nothing to enable without a user manager to enable it in, and failing here
+# would be worse than skipping: omarchy-provision-first-run writes its
+# completion marker only when every step succeeded, so one failure replays the
+# whole sequence -- both of its notifications included -- on every login.
+user_manager_socket="${XDG_RUNTIME_DIR:-/run/user/$UID}/systemd/private"
+
+if [[ ! -S $user_manager_socket ]]; then
+  echo "No systemd user manager is running; skipping user units."
+  exit 0
+fi
+
 systemctl --user daemon-reload
 systemctl --user enable --now \
   bt-agent.service \
