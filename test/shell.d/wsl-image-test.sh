@@ -124,6 +124,30 @@ for probe in "2ms 0" "5min 300" "2s 2" "5m 300" "1h 3600" "90 90"; do
 done
 pass "the systemd-run shim converts systemd time spans correctly"
 
+# VS Code's launcher greps /proc/version for Microsoft and then blocks on
+# "read -r YN". That stops the install with no output and makes launching exit
+# silently, since uwsm-app gives the prompt an empty stdin.
+grep -q 'DONT_PROMPT_WSL_INSTALL=1' "$ROOT/install/wsl/vscode.sh" ||
+  fail "install/wsl/vscode.sh answers VS Code's WSL prompt in advance"
+grep -q 'install -Dm644 /dev/stdin /etc/profile.d/omarchy-wsl-vscode.sh' "$ROOT/install/wsl/vscode.sh" ||
+  fail "install/wsl/vscode.sh installs the variable where login shells find it"
+pass "install/wsl/vscode.sh answers VS Code's WSL install prompt"
+
+# Belt and braces for the same class of bug: the theme sync cannot answer a
+# prompt, so it must not be able to wait for one.
+grep -q -- '--list-extensions </dev/null' "$ROOT/bin/omarchy-theme-set-vscode" ||
+  fail "omarchy-theme-set-vscode cannot block listing extensions"
+grep -q -- '--install-extension "$extension" </dev/null' "$ROOT/bin/omarchy-theme-set-vscode" ||
+  fail "omarchy-theme-set-vscode cannot block installing an extension"
+pass "omarchy-theme-set-vscode never waits on stdin"
+
+# Both leaves have to actually run during the build.
+for leaf in vscode systemd-run; do
+  grep -q "wsl/$leaf.sh" "$ROOT/install/wsl/all.sh" ||
+    fail "install/wsl/all.sh runs $leaf.sh"
+done
+pass "install/wsl/all.sh runs the vscode and systemd-run leaves"
+
 # The viewer runs on Windows so the session can reach the Windows clipboard; an
 # X11 viewer inside WSLg bridges to Xwayland instead. The fallback has to stay,
 # because nothing on a fresh Windows install provides a VNC client.

@@ -115,9 +115,14 @@ set_theme() {
 
     # Only install a well-formed publisher.name id; a malformed one skips the
     # install without skipping the colorTheme write below.
+    #
+    # Both calls read from /dev/null. Nothing here can answer a prompt, and an
+    # editor CLI that stops to ask something would otherwise block its caller
+    # for good with its question sent to /dev/null along with the rest of
+    # stderr -- an install that looks like a hang rather than a failure.
     if [[ $extension =~ ^[a-zA-Z0-9._-]+$ ]] &&
-      ! "$editor_cmd" --list-extensions 2>/dev/null | grep -Fxq "$extension"; then
-      "$editor_cmd" --install-extension "$extension" >/dev/null 2>&1
+      ! "$editor_cmd" --list-extensions </dev/null 2>/dev/null | grep -Fxq "$extension"; then
+      "$editor_cmd" --install-extension "$extension" </dev/null >/dev/null 2>&1
     fi
   elif [[ -f "$GENERATED_THEME" ]]; then
     # VS Code only discovers local color themes through an extension package.
