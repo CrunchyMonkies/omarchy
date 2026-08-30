@@ -225,6 +225,23 @@ grep -q 'hide_compositor_cursor' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "install/wsl/hypr.sh leaves the compositor cursor on for TurboVNC"
 pass "the cursor is drawn once, whichever viewer runs"
 
+# WSL has no sound hardware, so WSLg's PulseAudio is the only way audio leaves
+# the machine. When WSLGd fails, the socket never appears and every player is
+# silent with nothing on screen to say why -- which is how it went unnoticed.
+grep -q 'wslg_audio_present()' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session can tell whether audio is available"
+grep -q 'audio:.*wslg_audio_present' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "startx --diagnose reports audio"
+pass "startx --diagnose reports whether audio is available"
+
+# The desktop itself does not need WSLg running: the viewer is a Windows
+# program and wayvnc serves it over the loopback. Only the mount is required,
+# so this check must stay a directory test -- tightening it to demand a live
+# WSLg would refuse to start a session that works perfectly well without one.
+grep -A 2 '^wslg_present()' "$ROOT/bin/omarchy-launch-wsl-session" | grep -q '\[\[ -d /mnt/wslg \]\]' ||
+  fail "wslg_present stays a mount check so the desktop starts without WSLg running"
+pass "a dead WSLg does not stop the desktop starting"
+
 # The viewer titles its window from the desktop name the server advertises.
 # Unnamed, the one window standing in for the whole desktop is called WayVNC,
 # after the transport. Nothing breaks if this regresses, which is why it is
