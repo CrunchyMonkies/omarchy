@@ -127,6 +127,12 @@ grep -q 'resolve_binds_by_sym' "$ROOT/install/wsl/hypr.sh" ||
   fail "install/wsl/hypr.sh makes Hyprland resolve keybindings by symbol"
 pass "install/wsl/hypr.sh makes Hyprland resolve keybindings by symbol"
 
+# On TurboVNC's scan-code path the right Super key arrives as the Japanese
+# keypad comma and sets no modifier, so half the keyboard's bindings die.
+grep -q 'noServerKeyMap' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session has the viewer send keysyms, not scan codes"
+pass "omarchy-launch-wsl-session has the viewer send keysyms, not scan codes"
+
 # Stock neatvnc never announces the screen layout at connect, so TurboVNC
 # concludes the server cannot resize and disables it for the session.
 [[ -f $ROOT/install/wsl/patches/neatvnc-announce-desktop-size.patch ]] ||

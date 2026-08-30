@@ -416,6 +416,13 @@ turbovnc_jar="$viewer_dir/TurboVNC/java/VncViewer.jar"
 # neatvnc built by install/wsl/neatvnc.sh: stock neatvnc never announces the
 # screen layout at connect, so TurboVNC concludes resizing is unsupported at
 # its first framebuffer update and disables it permanently. The clipboard is
+# ServerKeyMap is off so the viewer sends X11 keysyms rather than raw
+# scancodes. With the scancode path the right Super key arrives as evdev 95
+# (the Japanese keypad comma, NoSymbol) instead of 126, because the viewer
+# drops the extended bit from the E0 5C that Windows reports -- so it sets no
+# modifier and no binding fires. Keysyms are layout independent and name the
+# key outright, which is what wayvnc looks up.
+#
 # Scale is pinned to 100 because the viewer persists parameters between runs,
 # and any automatic scaling silently disables desktop resizing -- the two are
 # mutually exclusive. The clipboard is left to
@@ -435,6 +442,7 @@ if [[ -n $viewer_dir ]] && [[ -f $turbovnc_jar ]]; then
     -SecurityTypes None \
     -DesktopSize Auto \
     -Scale 100 \
+    -noServerKeyMap \
     -noToolbar \
     "$VNC_ADDRESS::$VNC_PORT"
 elif [[ -n $viewer_dir ]] && [[ -f $viewer_dir/vncviewer64.exe ]]; then
