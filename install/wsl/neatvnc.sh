@@ -23,13 +23,17 @@ build_dir=/tmp/omarchy-neatvnc
 # a throwaway account that is removed again below.
 build_user=omarchy-build
 
-# debugedit belongs to makepkg rather than to neatvnc: Arch's makepkg.conf
-# keeps `debug` in OPTIONS, and makepkg stops with "Cannot find the debugedit
-# binary required for including source files in debug packages" before it
-# builds anything. base-devel would supply it, but that is in
-# omarchy-other.packages and the image installs only the base manifest, so
-# --nodeps below cannot cover it either.
-pacman -S --needed --noconfirm meson ninja debugedit >/dev/null
+# base-devel is makepkg's own toolchain, not neatvnc's, so --nodeps below does
+# not cover it and the base manifest does not carry it -- it lives in
+# omarchy-other.packages, which the image never installs. Without it makepkg
+# stops before building (no debugedit, since Arch's makepkg.conf keeps debug in
+# OPTIONS) and then again inside prepare() (no patch). meson and ninja are
+# neatvnc's, and base-devel does not include them.
+#
+# It stays in the image afterwards, as meson and ninja already did. Removing it
+# would have to unpick a dependency tree that now overlaps the base manifest --
+# fakeroot is in both.
+pacman -S --needed --noconfirm base-devel meson ninja >/dev/null
 
 useradd --system --create-home --home-dir /var/tmp/omarchy-build "$build_user"
 
