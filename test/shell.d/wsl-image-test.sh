@@ -88,6 +88,42 @@ for shim in uwsm-app uwsm; do
 done
 pass "install/wsl/uwsm.sh shims uwsm-app and uwsm"
 
+# Five commands ask the user manager for a scope of their own. omarchy-launch-browser
+# is the one that hurt: it passes StandardError=null, so a browser that never
+# started left nothing behind to say so.
+grep -q 'install -Dm755 /dev/stdin /usr/local/bin/systemd-run ' "$ROOT/install/wsl/systemd-run.sh" ||
+  fail "install/wsl/systemd-run.sh installs the systemd-run shim"
+pass "install/wsl/systemd-run.sh shims systemd-run"
+
+# Only --user is broken. omarchy-sudo-passwordless schedules against the system
+# manager, which works here, so a shim that swallowed every call would break it.
+grep -q 'exec /usr/bin/systemd-run "$@"' "$ROOT/install/wsl/systemd-run.sh" ||
+  fail "the systemd-run shim delegates when --user is absent"
+pass "the systemd-run shim delegates when --user is absent"
+
+# Three of the five callers are timers: shutdown and reboot return before the
+# machine goes down, and omarchy-reminder schedules minutes ahead. Collapsing
+# those to "run now" reboots the machine out from under the caller and fires
+# every reminder immediately, with nothing to show the delay was dropped.
+for form in '--on-active=\*)' '--on-active)'; do
+  grep -q -- "$form" "$ROOT/install/wsl/systemd-run.sh" ||
+    fail "the systemd-run shim handles the $form form of --on-active"
+done
+pass "the systemd-run shim handles both forms of --on-active"
+
+# The span arithmetic itself, run rather than read: "2ms" ends in s and "5min"
+# ends in n, so the case order is the only thing keeping the suffixes apart.
+shim_source=$(sed -n "/^install -Dm755 .*systemd-run <<'SYSTEMD_RUN'$/,/^SYSTEMD_RUN$/p" \
+  "$ROOT/install/wsl/systemd-run.sh" | sed '1d;$d')
+
+for probe in "2ms 0" "5min 300" "2s 2" "5m 300" "1h 3600" "90 90"; do
+  set -- $probe
+  got=$(bash -c "${shim_source%%$'\n'user_scope=*}"$'\n'"span_to_seconds $1")
+  [[ $got == "$2" ]] ||
+    fail "the systemd-run shim reads the span $1 as $2 seconds" "got $got"
+done
+pass "the systemd-run shim converts systemd time spans correctly"
+
 # The viewer runs on Windows so the session can reach the Windows clipboard; an
 # X11 viewer inside WSLg bridges to Xwayland instead. The fallback has to stay,
 # because nothing on a fresh Windows install provides a VNC client.

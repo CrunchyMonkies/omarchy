@@ -123,6 +123,10 @@ Omarchy launches every application through `uwsm-app`, which asks `wayland-wm-ap
 
 The same environment is installed at `/etc/profile.d/omarchy-wslg.sh` for ordinary shells, so individual GUI apps opened from a prompt find the WSLg sockets too.
 
+Five commands go further and ask the user manager for a scope of their own, through `systemd-run --user`: `omarchy-launch-browser`, `omarchy-menu-share`, `omarchy-system-shutdown`, `omarchy-system-reboot` and `omarchy-reminder`. Those fail before they start anything, and `omarchy-launch-browser` passes `--property=StandardError=null`, so the browser simply never appeared and nothing was written anywhere — the failure had no symptom but absence.
+
+`install/wsl/systemd-run.sh` shims it the same way, with two things it must get right. **Only `--user` is intercepted**; without that flag the call goes straight to `/usr/bin/systemd-run`, because the *system* manager works here and `omarchy-sudo-passwordless` schedules its timers against it. And **`--on-active` is translated, not discarded**: three of the five callers are timers, where the shutdown and reboot paths use the delay to return before the machine goes down and `omarchy-reminder` schedules minutes ahead. A shim that collapsed those to "run now" would reboot the machine out from under the command that asked and fire every reminder immediately — worse than not running them. The spans become a `sleep` before the command, and output goes to the journal rather than nowhere, so the next failure of this kind is visible.
+
 ### Keybindings
 
 **Hyprland matches keybindings by keycode, and that does not work here.** The only keyboard in a WSL session is the virtual one wayvnc creates for the VNC client, and it carries its own keymap, so the keycodes never line up and not one binding fires. Typed text still reaches applications, which makes it look like the bindings are broken rather than the matching — a session where `SUPER + RETURN` does nothing but typing works is this, every time.
