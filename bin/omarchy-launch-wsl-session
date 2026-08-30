@@ -218,8 +218,25 @@ export GALLIUM_DRIVER=llvmpipe
 export XDG_CURRENT_DESKTOP=Hyprland
 export XDG_SESSION_TYPE=wayland
 
+# hyprctl needs HYPRLAND_INSTANCE_SIGNATURE, and only the compositor and its
+# children have it -- this command is the compositor's parent. Hyprland names a
+# directory after the signature when it starts, so take the newest one, the way
+# omarchy-restart-shell does for callers outside the session.
+session_signature() {
+  local hypr_dir
+
+  hypr_dir=$(find "$XDG_RUNTIME_DIR/hypr" -mindepth 1 -maxdepth 1 -type d \
+    -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-)
+  [[ -n $hypr_dir ]] || return 1
+
+  echo "${hypr_dir##*/}"
+}
+
 session_ready() {
-  hyprctl monitors >/dev/null 2>&1
+  local signature
+
+  signature=$(session_signature) || return 1
+  HYPRLAND_INSTANCE_SIGNATURE="$signature" hyprctl monitors >/dev/null 2>&1
 }
 
 vnc_listening() {
@@ -279,6 +296,8 @@ if ! wait_until 60 session_ready; then
   echo "Run 'startx --diagnose', and see 'omarchy debug' for the session log." >&2
   exit 1
 fi
+
+export HYPRLAND_INSTANCE_SIGNATURE=$(session_signature)
 
 # wayvnc only resizes an output whose name starts with HEADLESS-, and the VKMS
 # output cannot take a custom mode: it offers the fixed list a driver with no
