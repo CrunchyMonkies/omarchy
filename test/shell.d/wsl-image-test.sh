@@ -71,6 +71,23 @@ grep -q "the container-only pacman sandbox opt-out reached the image" \
   fail "the build fails if that opt-out reaches the image"
 pass "the pacman sandbox opt-out is container-only"
 
+# WSL has no working systemd user manager, so the launcher is the session leader
+# and must not reach for one -- reading WAYLAND_DISPLAY back out of it is what it
+# used to do, and that failed the session before the desktop ever drew.
+! grep -q 'systemctl --user' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session does not depend on a systemd user manager"
+grep -q 'dbus-run-session -- Hyprland' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session starts the compositor under its own session bus"
+pass "omarchy-launch-wsl-session owns the session without systemd --user"
+
+# Every application Omarchy launches goes through uwsm-app, which needs the user
+# manager. Without these shims the desktop starts and can launch nothing.
+for shim in uwsm-app uwsm; do
+  grep -q "install -Dm755 /dev/stdin /usr/local/bin/$shim " "$ROOT/install/wsl/uwsm.sh" ||
+    fail "install/wsl/uwsm.sh installs the $shim shim"
+done
+pass "install/wsl/uwsm.sh shims uwsm-app and uwsm"
+
 # run_logged sources each path verbatim, so a typo here fails the whole install
 # halfway through a build rather than at review time.
 missing=""

@@ -76,15 +76,36 @@ startx
 
 `install/wsl/wslg.sh` installs `/usr/local/bin/startx` as a small wrapper that execs `omarchy-launch-wsl-session`. There is no X server involved despite the name — `startx` is simply where people reach for a desktop from a WSL shell. `xorg-xinit` is not installed and `/usr/local/bin` precedes `/usr/bin`, so nothing is shadowed.
 
-The launcher points aquamarine at the VKMS device, unsets `WAYLAND_DISPLAY`, and then runs the exact line from `default/wayland-sessions/omarchy.desktop`:
+The launcher points aquamarine at the VKMS device, unsets `WAYLAND_DISPLAY`, and starts the compositor under its own D-Bus session bus:
 
 ```bash
-uwsm start -g -1 -e -D Hyprland hyprland.desktop
+dbus-run-session -- Hyprland
 ```
 
-Going through uwsm is what sources `/usr/share/uwsm/env.d/10-omarchy` (and so sets `OMARCHY_PATH`) and lets `default/hypr/autostart.lua` bring up the shell, first-run provisioning, and the rest.
+On hardware that line is `uwsm start -g -1 -e -D Hyprland hyprland.desktop`, from `default/wayland-sessions/omarchy.desktop`, which is what SDDM runs. WSL cannot use it — see [No systemd user session](#no-systemd-user-session) below.
 
 It starts in the background rather than replacing the launcher, because the session still has to be given somewhere to draw and something to show it in. Once `hyprctl` answers, the launcher creates a headless output, serves it with wayvnc on the loopback, and opens a VNC viewer as an ordinary WSLg client. Closing that window ends the session.
+
+### No systemd user session
+
+**`systemd --user` does not work on Arch under WSL.** `user@1000.service` fails with `Failed to spawn executor: Device or resource busy`, every time, on a freshly imported image. `user@0` — root — starts fine; only the login account is affected.
+
+The reason is visible in the cgroup tree. `user@1000.service` has leftover children (`init.scope`, `session.slice/dbus.service`, `session.slice/at-spi-dbus-bus.service`) whose `cgroup.procs` list **PID 0**: processes belonging to a PID namespace WSL holds open, which cannot be reaped and whose cgroups cannot be removed. systemd spawns services with `clone3(CLONE_INTO_CGROUP)`, which requires the target cgroup to be a leaf and returns `EBUSY` against a populated one. Nothing inside the distribution can clear it. A stock `archlinux` WSL distribution fails identically, so this is not something Omarchy causes or can fix.
+
+That rules out uwsm, whose whole job is driving systemd user units. So on WSL `startx` is the session leader instead, and takes on what uwsm would have done:
+
+- **The session environment.** uwsm sources `/usr/share/uwsm/env.d/10-omarchy`, which is where `OMARCHY_PATH`, `TERMINAL` and `EDITOR` come from. The launcher reads `default/bash/env-bootstrap` and `default/uwsm/default` itself. A login shell already has `OMARCHY_PATH` from `/etc/profile.d/omarchy.sh`; `wsl -d Omarchy startx` is not a login shell, which is why the launcher cannot assume it.
+- **The session bus.** Normally `dbus.socket` in the user manager. `dbus-run-session` is the standalone equivalent.
+- **The activation environment.** `default/hypr/autostart.lua` runs `dbus-update-activation-environment --systemd --all`, which needs the user manager. The launcher runs the same command without `--systemd` once the compositor's socket exists, so the `xdg-desktop-portal` backends are activated knowing which display to talk to.
+- **The compositor's socket name.** `autostart.lua` publishes it into the user manager, and wayvnc needs it. With no manager to ask, the launcher lists the `wayland-N` sockets before starting Hyprland and takes whichever one appears afterwards. WSLg's own `wayland-0` is already in the first list.
+
+`graphical-session.target` is never reached, so the six user units in `default/systemd/user/` that `install/user/first-run/enable-user-units.sh` enables do not start, and that step reports a failure during first-run provisioning. All six are optional or hardware-shaped — `bt-agent` (no bluez in the image), `omarchy-recover-internal-monitor`, `omarchy-sleep-lock` (no logind suspend here), `omarchy-migrate-notify`, `omarchy-fcitx5`, `omarchy-crash-watch` — so the desktop is unaffected.
+
+### Launching applications
+
+Omarchy launches every application through `uwsm-app`, which asks `wayland-wm-app-daemon.service` to put it in its own systemd user scope: `o.launch()` in `default/hypr/helpers.lua`, the menu, the shell's app library, and around thirty commands in `bin/`. With no user manager that daemon does not exist, and the desktop would come up able to launch nothing at all.
+
+`install/wsl/uwsm.sh` shims both `uwsm-app` and `uwsm` into `/usr/local/bin`, which precedes `/usr/bin` — the same mechanism as the `startx` shim, and for the same reason: WSL knowledge stays in `install/wsl/` rather than becoming a condition in thirty call sites. `uwsm-app` drops the options up to the first `--` and runs the command directly under `setsid --fork`, returning immediately the way the real one does, with output sent to the journal. `uwsm stop` becomes `hyprctl dispatch exit`; anything else falls through to the real `uwsm`.
 
 The same environment is installed at `/etc/profile.d/omarchy-wslg.sh` for ordinary shells, so individual GUI apps opened from a prompt find the WSLg sockets too.
 
@@ -186,6 +207,7 @@ Dragging the window edge resizes the desktop to match. The new size is stored im
 | `bin/omarchy-dev-wsl-kernel` | Builds a VKMS-enabled WSL2 kernel in Docker |
 | `bin/omarchy-apply-wsl` | Root-owned system setup inside the image |
 | `bin/omarchy-launch-wsl-session` | What `startx` runs: the session, wayvnc, and the viewer |
+| `install/wsl/uwsm.sh` | Shims `uwsm-app` and `uwsm`, which need a systemd user manager |
 | `install/wsl/all.sh` | The ordered step list |
 | `install/wsl/omarchy-wsl-skip.packages` | Packages subtracted from the base manifest |
 | `default/wsl/wsl.conf` | `/etc/wsl.conf` — systemd, interop, resolv.conf generation |
