@@ -104,11 +104,25 @@ That builds `microsoft/WSL2-Linux-Kernel` at `linux-msft-wsl-6.6.y` with the pat
 
 The kernel build container is Debian bookworm, the one place in this repo that is deliberately not Arch. Linux 6.6 is from late 2023 and its in-tree `tools/` build compiles with `-Werror`, so a current compiler fails it on warnings that did not exist when the tree was written — Arch's GCC 15 stops at `libbpf.c: assignment discards 'const' qualifier`. Bookworm's GCC 12 is contemporaneous with 6.6. Nothing from that container reaches the image.
 
+The build emits two artifacts: the kernel itself, and a `-modules.tar.gz` beside it. Both are needed. The stock WSL kernel leaves most of itself as modules and ships them inside the distribution image, so replacing only the `bzImage` silently deletes every `=m` feature — the modules on disk belong to a version string that no longer exists. Docker is usually the first casualty, because `CONFIG_BRIDGE` and `CONFIG_NETFILTER_XT_MATCH_ADDRTYPE` are both modules and `dockerd` will not start without them.
+
 The command installs nothing and changes no Windows configuration — it prints the `.wslconfig` snippet to apply by hand:
 
 ```ini
 [wsl2]
 kernel=C:\Users\<you>\bzImage
+```
+
+The `kernel=` setting is global: every distribution on the machine reboots onto it, not just Omarchy. So unpack the modules into each of them:
+
+```bash
+sudo tar -C / -xzf ~/bzImage-modules.tar.gz
+```
+
+Unpacking them is necessary but not sufficient. The kernel loads a module on first use by running `/sbin/modprobe`, and under WSL2 that runs in the utility VM's own root rather than the distribution's, where neither `modprobe` nor `/lib/modules` exists — so nothing loads on demand and every module has to be named up front. Docker is again the clearest case: it needs `nft_compat` for the `iptables` nft backend plus `xt_addrtype`, `xt_MASQUERADE` and `bridge`, and without them `dockerd` fails with `Extension addrtype revision 0 not supported, missing kernel module?`. Record them so they load at boot:
+
+```bash
+printf '%s\n' bridge nft_compat xt_addrtype xt_MASQUERADE | sudo tee /etc/modules-load.d/wsl-kernel.conf
 ```
 
 Then, from Windows rather than from inside WSL (it ends every distribution):

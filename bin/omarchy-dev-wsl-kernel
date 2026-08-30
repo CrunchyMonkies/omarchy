@@ -98,6 +98,7 @@ if [[ -z $output ]]; then
 fi
 
 output=$(realpath -m "$output")
+modules="$output-modules.tar.gz"
 
 if [[ ! -d $(dirname "$output") ]]; then
   echo "Error: output directory does not exist: $(dirname "$output")" >&2
@@ -186,7 +187,17 @@ make "-j$KERNEL_JOBS"
 
 install -Dm644 arch/x86/boot/bzImage /out/bzImage
 
-step "Built /out/bzImage"
+# The stock WSL kernel leaves most of itself as modules and ships them in the
+# distribution image, so a bzImage on its own is not a drop-in replacement:
+# every =m option silently disappears. Docker is the first thing to notice,
+# because CONFIG_BRIDGE and CONFIG_NETFILTER_XT_MATCH_ADDRTYPE are both modules
+# and dockerd refuses to start without them. Ship the modules alongside the
+# kernel so the distribution can be made whole again.
+step "Installing modules"
+make "-j$KERNEL_JOBS" modules_install INSTALL_MOD_PATH=/out/modules INSTALL_MOD_STRIP=1
+tar -C /out/modules -czf /out/modules.tar.gz lib/modules
+
+step "Built /out/bzImage and /out/modules.tar.gz"
 BUILD
 
 echo "Building the kernel build image"
@@ -205,6 +216,7 @@ docker run \
   /build.sh
 
 docker cp "$CONTAINER:/out/bzImage" "$output"
+docker cp "$CONTAINER:/out/modules.tar.gz" "$modules"
 
 # Best effort: on a WSL host the Windows profile is right there, so name the
 # real path instead of a placeholder the user has to translate.
@@ -216,10 +228,11 @@ fi
 cat <<NOTE
 
 Built $output
+      $modules
 
 To use it:
 
-  1. Copy it somewhere Windows can read, e.g.
+  1. Copy the kernel somewhere Windows can read, e.g.
        cp "$output" /mnt/c/Users/<you>/bzImage
 
   2. Add this to ${windows_profile:-C:\\Users\\<you>}\\.wslconfig
@@ -227,11 +240,16 @@ To use it:
        [wsl2]
        kernel=${windows_profile:-C:\\Users\\<you>}\\bzImage
 
-  3. From Windows (not from inside WSL, it ends every distribution):
+  3. Unpack the modules into every distribution that will run on this kernel.
+     The kernel setting is global, so that means all of them, not just Omarchy:
+
+       sudo tar -C / -xzf "$modules"
+
+  4. From Windows (not from inside WSL, it ends every distribution):
 
        wsl --shutdown
 
-  4. Start the distribution again and confirm the node arrived:
+  5. Start the distribution again and confirm the node arrived:
 
        ls /dev/dri/renderD128
        startx --diagnose
