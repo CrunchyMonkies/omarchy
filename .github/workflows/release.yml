@@ -189,7 +189,27 @@ jobs:
         # writes its own, differently formatted, date stamp.
         run: |
           mkdir -p dist
-          ./bin/omarchy-dev-wsl-build --output "dist/omarchy-$TAG.wsl"
+
+          # Provisioning inside the image logs to a file rather than stdout, so
+          # a failed step otherwise surfaces as nothing but its exit code.
+          # --keep-container leaves the container behind to copy that log out
+          # of; the runner is thrown away either way.
+          set +e
+          ./bin/omarchy-dev-wsl-build --keep-container --output "dist/omarchy-$TAG.wsl"
+          status=$?
+          set -e
+
+          if (( status != 0 )); then
+            container=$(docker ps -a --filter name=omarchy-wsl-build- --format '{{.Names}}' | head -1)
+
+            if [[ -n $container ]]; then
+              echo "----- /var/log/omarchy-install.log -----"
+              docker cp "$container:/var/log/omarchy-install.log" "$RUNNER_TEMP/omarchy-install.log" 2>/dev/null &&
+                cat "$RUNNER_TEMP/omarchy-install.log"
+            fi
+
+            exit $status
+          fi
 
       - name: Build the source tarball
         env:
