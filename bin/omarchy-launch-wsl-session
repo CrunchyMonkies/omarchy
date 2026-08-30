@@ -60,6 +60,12 @@ done
 
 # WSLg publishes the compositor sockets here. Without it there is no window to
 # put the session in and nothing below can work.
+# "locale -a" spells them without the dash and in lower case -- en_US.UTF-8 is
+# listed as en_US.utf8 -- so a literal comparison against LANG never matches.
+normalized_locale() {
+  echo "${1//-/}" | sed 's/\.[Uu][Tt][Ff]8$/.utf8/'
+}
+
 wslg_present() {
   [[ -d /mnt/wslg ]]
 }
@@ -243,6 +249,16 @@ fi
 # The other half of what env.d/10-omarchy does: TERMINAL and EDITOR.
 if [[ -r $OMARCHY_PATH/default/uwsm/default ]]; then
   source "$OMARCHY_PATH/default/uwsm/default"
+fi
+
+# WSL's /init hands down the Windows locale, which is very often one this
+# image has never generated -- install/wsl/locale.sh generates en_US.UTF-8, but
+# Windows may be set to any of them. Passing an ungenerated LANG to the session
+# makes setlocale() fail in everything it launches, so fall back to the one
+# locale always present rather than hand every application a name that resolves
+# to nothing.
+if [[ -n ${LANG:-} ]] && ! locale -a 2>/dev/null | grep -qxF "$(normalized_locale "$LANG")"; then
+  export LANG=C.UTF-8
 fi
 
 # WSLg's sockets, in case this was reached from a shell that did not read
