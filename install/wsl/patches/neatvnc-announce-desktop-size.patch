@@ -1,0 +1,56 @@
+--- a/src/server.c
++++ b/src/server.c
+@@ -609,6 +609,42 @@
+ 	return layout;
+ }
+ 
++/* Announce the current screen layout as soon as the client's encodings are
++ * known, so that it learns the server supports resizing.
++ *
++ * A client only learns of ExtendedDesktopSize support by receiving such a
++ * rect, and some clients latch that at their first framebuffer update. The
++ * first update they receive from us is a standalone cursor or desktop name
++ * rect, so without this they conclude that resizing is unsupported and never
++ * ask again. TurboVNC does this and disables desktop resizing permanently.
++ */
++static void send_desktop_size_announcement(struct nvnc_client* client)
++{
++	struct nvnc* server = client->server;
++	uint16_t width, height;
++
++	if (!have_display_buffers(server))
++		return;
++
++	calculate_desktop_extents(server, &width, &height);
++
++	struct nvnc_desktop_layout* layout =
++		build_desktop_layout(server, width, height);
++	if (!layout)
++		return;
++
++	struct rfb_server_fb_update_msg head = {
++		.type = RFB_SERVER_TO_CLIENT_FRAMEBUFFER_UPDATE,
++		.n_rects = htons(1),
++	};
++
++	stream_write(client->net_stream, &head, sizeof(head));
++	send_desktop_resize_rect(client, layout);
++
++	free(layout);
++}
++
++
+ static int send_server_init_message(struct nvnc_client* client)
+ {
+ 	struct nvnc* server = client->server;
+@@ -900,6 +936,10 @@
+ 	if (client_has_encoding(client, RFB_ENCODING_FENCE))
+ 		send_ping(client, 0);
+ 
++
++	if (client_supports_resizing(client))
++		send_desktop_size_announcement(client);
++
+ 	return sizeof(*msg) + 4 * n_encodings;
+ }
+ 
