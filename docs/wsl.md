@@ -1,5 +1,7 @@
 # Omarchy on WSL
 
+This is how the WSL image works. For the order to do things in — build a kernel, import, set up the Windows side, start the desktop — see [`README.wsl.md`](../README.wsl.md).
+
 Omarchy can be built into an importable WSL image on top of the official [Arch Linux WSL rootfs](https://gitlab.archlinux.org/archlinux/archlinux-wsl). The image boots to a plain shell — **the desktop never starts on its own** — and `startx` brings the Hyprland session up as a window on the Windows desktop through WSLg.
 
 This is a development and evaluation target, not a supported install path. It exists so a Windows workstation can run this checkout without a VM or a spare machine.
@@ -100,6 +102,14 @@ That rules out uwsm, whose whole job is driving systemd user units. So on WSL `s
 - **The compositor's socket name.** `autostart.lua` publishes it into the user manager, and wayvnc needs it. With no manager to ask, the launcher lists the `wayland-N` sockets before starting Hyprland and takes whichever one appears afterwards. WSLg's own `wayland-0` is already in the first list.
 
 `graphical-session.target` is never reached, so the six user units in `default/systemd/user/` that `install/user/first-run/enable-user-units.sh` enables do not start, and that step reports a failure during first-run provisioning. All six are optional or hardware-shaped — `bt-agent` (no bluez in the image), `omarchy-recover-internal-monitor`, `omarchy-sleep-lock` (no logind suspend here), `omarchy-migrate-notify`, `omarchy-fcitx5`, `omarchy-crash-watch` — so the desktop is unaffected.
+
+### No idle lock
+
+The image ships with idle locking off, seeded as `/etc/skel/.local/state/omarchy/indicators/stay-awake` by `install/wsl/idle.sh`.
+
+It has to be. Microsoft requires a distributable WSL image to carry no password hashes, which is why `/etc/sudoers.d/omarchy-wsl` grants passwordless sudo — and it equally means the lock screen can never be answered. `passwd -S` reports the account as `L`. A session that locks on idle is one you cannot get back into, and `omarchy-restart-shell` does not rescue it: `allow_session_lock_restore` lets the fresh shell re-acquire the lock, so the only way out is ending the session.
+
+The idle service has no off switch for the lock timeout on its own — `secondsFromConfig` treats `0` as *lock immediately*, not never — so the marker that `omarchy-toggle-idle` writes is the mechanism. `omarchy toggle idle` still flips it back on, which on WSL is a way to lock yourself out.
 
 ### Launching applications
 
