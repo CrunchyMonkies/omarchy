@@ -318,9 +318,11 @@ sockets_before=$(compgen -G "$XDG_RUNTIME_DIR/wayland-[0-9]*" | sort)
 # call fails with EBUSY every time. docs/wsl.md covers it.
 #
 # So the compositor is started directly, under the session bus dbus.socket
-# would otherwise have provided. Backgrounded rather than exec'd because the
+# would otherwise have provided. start-hyprland is Hyprland's own watchdog
+# launcher -- running the binary bare warns against it, and the watchdog wants
+# nothing from systemd or uwsm. Backgrounded rather than exec'd because the
 # output and the viewer still have to be set up once it is listening.
-dbus-run-session -- Hyprland &
+dbus-run-session -- start-hyprland &
 session_pid=$!
 
 if ! wait_until 60 session_ready; then

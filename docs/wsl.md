@@ -101,7 +101,7 @@ That rules out uwsm, whose whole job is driving systemd user units. So on WSL `s
 - **The activation environment.** `default/hypr/autostart.lua` runs `dbus-update-activation-environment --systemd --all`, which needs the user manager. The launcher runs the same command without `--systemd` once the compositor's socket exists, so the `xdg-desktop-portal` backends are activated knowing which display to talk to.
 - **The compositor's socket name.** `autostart.lua` publishes it into the user manager, and wayvnc needs it. With no manager to ask, the launcher lists the `wayland-N` sockets before starting Hyprland and takes whichever one appears afterwards. WSLg's own `wayland-0` is already in the first list.
 
-`graphical-session.target` is never reached, so the six user units in `default/systemd/user/` that `install/user/first-run/enable-user-units.sh` enables do not start, and that step reports a failure during first-run provisioning. All six are optional or hardware-shaped — `bt-agent` (no bluez in the image), `omarchy-recover-internal-monitor`, `omarchy-sleep-lock` (no logind suspend here), `omarchy-migrate-notify`, `omarchy-fcitx5`, `omarchy-crash-watch` — so the desktop is unaffected.
+`graphical-session.target` is never reached, so the six user units in `default/systemd/user/` that `install/user/first-run/enable-user-units.sh` enables do not start. That step now skips itself when no user manager is running, rather than failing: `omarchy-provision-first-run` writes its completion marker only when every step succeeded, so a single failure replayed the whole first-run sequence — welcome notification included — on every single login. All six units are optional or hardware-shaped — `bt-agent` (no bluez in the image), `omarchy-recover-internal-monitor`, `omarchy-sleep-lock` (no logind suspend here), `omarchy-migrate-notify`, `omarchy-fcitx5`, `omarchy-crash-watch` — so the desktop is unaffected.
 
 ### No idle lock
 
@@ -110,6 +110,10 @@ The image ships with idle locking off, seeded as `/etc/skel/.local/state/omarchy
 It has to be. Microsoft requires a distributable WSL image to carry no password hashes, which is why `/etc/sudoers.d/omarchy-wsl` grants passwordless sudo — and it equally means the lock screen can never be answered. `passwd -S` reports the account as `L`. A session that locks on idle is one you cannot get back into, and `omarchy-restart-shell` does not rescue it: `allow_session_lock_restore` lets the fresh shell re-acquire the lock, so the only way out is ending the session.
 
 The idle service has no off switch for the lock timeout on its own — `secondsFromConfig` treats `0` as *lock immediately*, not never — so the marker that `omarchy-toggle-idle` writes is the mechanism. `omarchy toggle idle` still flips it back on, which on WSL is a way to lock yourself out.
+
+### No Wi-Fi prompt
+
+`install/user/first-run/wifi.sh` offers to configure wireless when the machine cannot reach the network. It now checks for a wireless interface first, so it stays quiet here: the image has none, the network belongs to the Windows host, and `install/wsl/services.sh` masks NetworkManager anyway. Without that check the prompt appeared on every login, after spending up to a minute in `nm-online` waiting for a daemon that is masked.
 
 ### Launching applications
 

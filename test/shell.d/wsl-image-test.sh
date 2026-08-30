@@ -76,7 +76,7 @@ pass "the pacman sandbox opt-out is container-only"
 # used to do, and that failed the session before the desktop ever drew.
 ! grep -q 'systemctl --user' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "omarchy-launch-wsl-session does not depend on a systemd user manager"
-grep -q 'dbus-run-session -- Hyprland' "$ROOT/bin/omarchy-launch-wsl-session" ||
+grep -q 'dbus-run-session -- start-hyprland' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "omarchy-launch-wsl-session starts the compositor under its own session bus"
 pass "omarchy-launch-wsl-session owns the session without systemd --user"
 
@@ -157,6 +157,18 @@ grep -q 'install -Dm644 /dev/null /etc/skel/.local/state/omarchy/indicators/stay
   "$ROOT/install/wsl/idle.sh" ||
   fail "install/wsl/idle.sh disables idle locking, which cannot be unlocked here"
 pass "install/wsl/idle.sh disables idle locking"
+
+# omarchy-provision-first-run writes its completion marker only when every step
+# succeeded, so one failing step replays the whole sequence -- and both of its
+# notifications -- on every login. There is no systemd user manager here.
+grep -q 'systemd/private' "$ROOT/install/user/first-run/enable-user-units.sh" ||
+  fail "enable-user-units.sh skips when there is no systemd user manager"
+pass "enable-user-units.sh skips when there is no systemd user manager"
+
+# Nothing should invite the user to configure wireless on a machine with none.
+grep -q 'has_wireless' "$ROOT/install/user/first-run/wifi.sh" ||
+  fail "wifi.sh checks for a wireless device before offering to set one up"
+pass "wifi.sh checks for a wireless device before offering to set one up"
 
 # run_logged sources each path verbatim, so a typo here fails the whole install
 # halfway through a build rather than at review time.
