@@ -167,17 +167,28 @@ fi
 # The DRM device the patches register is the whole point, and dxgkrnl is built
 # in, so the helpers it links against have to be built in too rather than left
 # as modules.
+#
+# VKMS supplies the CRTC and connector dxgkrnl does not have. Aquamarine's DRM
+# backend rejects dxgkrnl outright -- "Device /dev/dri/card0 does not support
+# kms" -- because the patches register a render-only node with nothing to scan
+# out to. VKMS is a full KMS device, so it gives the compositor a display to
+# drive. It has to be built in rather than a module: the kernel loads a module
+# on first use by running /sbin/modprobe, and under WSL2 that runs in the
+# utility VM's root rather than the distribution's, where neither modprobe nor
+# /lib/modules exists. Nothing would ever load it, so the display device has to
+# be there at boot.
 cat >>.config <<'FRAGMENT'
 CONFIG_DRM=y
 CONFIG_DRM_GEM_SHMEM_HELPER=y
 CONFIG_DXGKRNL=y
+CONFIG_DRM_VKMS=y
 FRAGMENT
 
 make olddefconfig
 
-for option in CONFIG_DRM=y CONFIG_DXGKRNL=y; do
+for option in CONFIG_DRM=y CONFIG_DXGKRNL=y CONFIG_DRM_VKMS=y; do
   if ! grep -qx "$option" .config; then
-    echo "Error: $option did not survive olddefconfig; the kernel would have no DRM node." >&2
+    echo "Error: $option did not survive olddefconfig; the kernel would have no usable DRM device." >&2
     exit 1
   fi
 done
