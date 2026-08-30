@@ -12,29 +12,56 @@ set -euo pipefail
 # ext_data_control_manager_v1, but a viewer running inside WSL bridges that to
 # Xwayland rather than to Windows.
 #
-# Windows ships no VNC client, so this fetches TigerVNC's standalone viewer --
-# the same project and the same version as the tigervnc package in the image,
-# and one that speaks the extended clipboard, which is what carries UTF-8.
+# Windows ships no VNC client, so this fetches two.
+#
+# TigerVNC is kept as the fallback: it is a single portable executable, and it
+# speaks the extended clipboard that carries UTF-8. Its limitation is that it
+# only forwards system keys in full screen (upstream issue #1899).
 #
 # Nothing is installed on the Linux side and no Windows setting is changed:
-# the viewer is a single executable dropped in the user's own AppData.
+# both viewers live in the user's own AppData.
 
 VIEWER_VERSION=1.16.2
 VIEWER_SHA256=58396d99556026da6b906c9ed51ad6cb5c840cc3fb65e53653c52ca5a80bfad9
 VIEWER_URL="https://sourceforge.net/projects/tigervnc/files/stable/$VIEWER_VERSION/vncviewer64-$VIEWER_VERSION.exe/download"
 
+# TurboVNC is the viewer the desktop uses. Every Omarchy binding starts with
+# SUPER, and Windows keeps that key for itself unless the viewer grabs the
+# keyboard; TurboVNC grabs it in a window (GrabKeyboard=Always), which TigerVNC
+# only does in full screen and UltraVNC only via a Scroll Lock toggle -- and
+# UltraVNC cannot resize the remote desktop at all.
+#
+# The installer is unpacked, never run: no entry in Windows' installed
+# programs, no elevation. The viewer is Java and ships its own JRE, so the
+# whole app/ tree is installed rather than a single file -- VncViewer.jar needs
+# turbovnchelper.dll, which is what implements the keyboard grab, beside it.
+TURBOVNC_VERSION=3.3.1
+TURBOVNC_SHA256=cb16f343ae39aac6fd8a6eb1c107e932bb2ff03419cb861d019cfb240896df1a
+TURBOVNC_URL="https://github.com/TurboVNC/turbovnc/releases/download/$TURBOVNC_VERSION/TurboVNC-$TURBOVNC_VERSION-x64.exe"
+
+# That installer is Inno Setup 6.x, which the innoextract in the Arch repos
+# (1.9) cannot read -- it stops at "Could not determine setup data version".
+# This fork can. It is fetched to a temporary directory and thrown away rather
+# than installed, so the image gains no dependency for a one-off unpack.
+INNOEXTRACT_SHA256=c898db2ecc282ff8d943e9868d03dd6f1fc6069ddd40430341b211f93826b360
+INNOEXTRACT_URL="https://github.com/crazy-max/innoextract/releases/download/v1.13.0/innoextract-linux-amd64"
+
 usage() {
   cat <<USAGE
 Usage: omarchy setup wsl viewer [--force]
 
-Downloads TigerVNC $VIEWER_VERSION's Windows viewer to your Windows profile, so
-'startx' opens the Omarchy desktop in a native Windows window with a
-shared clipboard.
+Downloads the Windows VNC viewers to your Windows profile and puts an
+Omarchy shortcut on your desktop, so 'startx' opens the desktop in a native
+Windows window with a shared clipboard.
 
-  --force   re-download even when the viewer is already installed
+  --force   re-download even when a viewer is already installed
 
-Without it the desktop still opens, in the viewer inside WSL, which has no
-access to the Windows clipboard.
+TurboVNC $TURBOVNC_VERSION is what the desktop uses: it grabs the keyboard in
+a window, which is what lets SUPER reach the session and the keybindings
+work. TigerVNC $VIEWER_VERSION is installed alongside it as a fallback.
+
+Without either the desktop still opens, in the viewer inside WSL, which
+cannot reach the Windows clipboard and never receives SUPER.
 USAGE
 }
 
@@ -75,6 +102,7 @@ fi
 
 viewer_dir="$(wslpath -u "$local_app_data")/Omarchy"
 viewer="$viewer_dir/vncviewer64.exe"
+turbovnc_dir="$viewer_dir/TurboVNC"
 
 # The image build cannot create this: it runs in a container with no Windows to
 # write to. So it happens here, alongside the viewer, as the other half of
@@ -134,9 +162,92 @@ PS1
   fi
 }
 
+# Download to $1 and refuse anything whose digest is not $2. Pinning is the
+# only integrity check available: neither publisher signs these files.
+fetch_verified() {
+  local url="$1" dest="$2" want="$3" label="$4" got
+
+  echo "Downloading $label"
+
+  if ! curl -fL --retry 3 --progress-bar -o "$dest" "$url"; then
+    echo "Error: could not download $label from $url" >&2
+    return 1
+  fi
+
+  got=$(sha256sum "$dest" | cut -d' ' -f1)
+
+  if [[ $got != "$want" ]]; then
+    echo "Error: $label does not match its expected checksum; not installing it." >&2
+    echo "  expected $want" >&2
+    echo "  got      $got" >&2
+    return 1
+  fi
+}
+
+# Unpack the viewer out of TurboVNC's installer without running it.
+install_turbovnc() {
+  local work extractor setup
+
+  work=$(mktemp -d)
+  extractor="$work/innoextract"
+  setup="$work/TurboVNC_Setup.exe"
+
+  if ! fetch_verified "$INNOEXTRACT_URL" "$extractor" "$INNOEXTRACT_SHA256" "innoextract"; then
+    rm -rf "$work"
+    return 1
+  fi
+  chmod +x "$extractor"
+
+  if ! fetch_verified "$TURBOVNC_URL" "$setup" "$TURBOVNC_SHA256" "TurboVNC $TURBOVNC_VERSION"; then
+    rm -rf "$work"
+    return 1
+  fi
+
+  if ! "$extractor" --silent --extract --output-dir "$work/out" "$setup" >/dev/null 2>&1; then
+    echo "Error: could not unpack the TurboVNC installer." >&2
+    rm -rf "$work"
+    return 1
+  fi
+
+  # The viewer is useless in pieces: the jar needs its helper library and the
+  # bundled JRE. Check for both ends of the tree before replacing what is
+  # installed, rather than leaving a half-copied directory behind.
+  if [[ ! -f $work/out/app/java/VncViewer.jar ]] || [[ ! -f $work/out/app/java/jre/bin/javaw.exe ]]; then
+    echo "Error: the TurboVNC installer did not contain the viewer and its JRE." >&2
+    rm -rf "$work"
+    return 1
+  fi
+
+  rm -rf "$turbovnc_dir"
+  mkdir -p "$viewer_dir"
+  cp -a "$work/out/app" "$turbovnc_dir"
+  rm -rf "$work"
+
+  echo "Installed $turbovnc_dir"
+}
+
+# UltraVNC was tried before TurboVNC and left these behind. It cannot resize
+# the remote desktop, so it is not coming back.
+remove_ultravnc() {
+  rm -f "$viewer_dir/uvnc-vncviewer.exe" "$viewer_dir/uvnc-vncviewer.exe.disabled" \
+    "$viewer_dir/options.vnc"
+}
+
 installed() {
   [[ -f $viewer ]] && [[ $(sha256sum "$viewer" | cut -d' ' -f1) == "$VIEWER_SHA256" ]]
 }
+
+turbovnc_installed() {
+  [[ -f $turbovnc_dir/java/VncViewer.jar ]] && [[ -f $turbovnc_dir/java/jre/bin/javaw.exe ]]
+}
+
+remove_ultravnc
+
+if (( force )) || ! turbovnc_installed; then
+  install_turbovnc || echo "Note: TurboVNC was not installed; the desktop will use TigerVNC." >&2
+else
+  echo "TurboVNC $TURBOVNC_VERSION is already installed at $turbovnc_dir"
+fi
 
 if (( ! force )) && installed; then
   echo "TigerVNC $VIEWER_VERSION is already installed at $viewer"
