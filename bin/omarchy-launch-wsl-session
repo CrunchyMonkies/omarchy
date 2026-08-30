@@ -100,6 +100,22 @@ session_running() {
   pgrep -x Hyprland >/dev/null 2>&1
 }
 
+# The viewer runs on Windows when omarchy-setup-wsl-viewer has put it there.
+# That is what gets the Windows clipboard: wayvnc already carries the selection
+# both ways over ext_data_control_manager_v1, but a viewer inside WSL bridges it
+# to Xwayland instead. Same cmd.exe idiom as default/wsl/oobe.sh.
+windows_viewer() {
+  local local_app_data viewer
+
+  local_app_data=$(/mnt/c/Windows/System32/cmd.exe /c "echo %LOCALAPPDATA%" 2>/dev/null | tail -1 | tr -d '\r\n')
+  [[ -n $local_app_data ]] || return 1
+
+  viewer="$(wslpath -u "$local_app_data")/Omarchy/vncviewer64.exe"
+  [[ -f $viewer ]] || return 1
+
+  echo "$viewer"
+}
+
 diagnose() {
   local device
   device=$(kms_device) || device=""
@@ -343,8 +359,37 @@ if ! wait_until 30 vnc_listening; then
   exit 1
 fi
 
-# The viewer is an ordinary WSLg X11 client, which is what makes this a real
-# window on the Windows desktop. It needs no dmabuf and negotiates no Wayland
-# protocol versions, which is why this works where nesting does not.
-# -RemoteResize is what turns a window drag into a desktop resize.
-vncviewer -SecurityTypes None -RemoteResize=1 "$VNC_ADDRESS:$VNC_PORT"
+# Neither viewer needs dmabuf or negotiates a Wayland protocol version, which
+# is why showing the session over VNC works where nesting the compositor in
+# WSLg's Weston does not.
+#
+# RemoteResize is on, so dragging the window resizes the desktop. The viewer
+# logs "SetDesktopSize failed: 4" when it does; that is misleading. Result 4 is
+# neatvnc's "request forwarded", not a refusal -- wayvnc applies the resize
+# asynchronously and answers again with "success".
+#
+# AcceptClipboard/SendClipboard are on by default; they are named anyway
+# because a shared clipboard is the reason the Windows viewer is preferred, and
+# a default is a quiet thing to depend on.
+#
+# AlwaysCursor draws the pointer locally. install/wsl/hypr.sh turns the
+# compositor's cursor off, because a headless output has no hardware cursor
+# plane: the compositor composites the cursor into the framebuffer, wayvnc
+# forwards it as well, and the viewer ends up showing two. With the compositor
+# one off, wayvnc sends an invisible cursor and this is what puts a real one
+# back -- drawn by the client, so it costs no round trip.
+viewer_options=(
+  -RemoteResize=1
+  -AcceptClipboard=1
+  -SendClipboard=1
+  -AlwaysCursor=1
+  -CursorType=System
+)
+
+if viewer=$(windows_viewer); then
+  "$viewer" -SecurityTypes=None "${viewer_options[@]}" "$VNC_ADDRESS:$VNC_PORT"
+else
+  echo "No Windows VNC viewer found, so the desktop opens in the one inside WSL." >&2
+  echo "That one cannot reach the Windows clipboard; 'omarchy setup wsl viewer' installs one that can." >&2
+  vncviewer -SecurityTypes None "${viewer_options[@]}" "$VNC_ADDRESS:$VNC_PORT"
+fi

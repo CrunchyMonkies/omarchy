@@ -195,9 +195,15 @@ vncviewer -SecurityTypes None -RemoteResize=1 127.0.0.1:5900
 
 wayvnc binds the loopback only. WSL2 forwards localhost from Windows, so nothing is gained by binding wider and an unauthenticated desktop would be on the LAN.
 
-The viewer is an ordinary WSLg X11 client, which is what makes this a real window on the Windows desktop and what makes the whole approach work. Nesting Hyprland directly in WSLg's Weston does not: that Weston is 9.0.0 and advertises `wl_compositor` v5 against the v6 aquamarine binds. Plain X11 drawing needs no dmabuf and negotiates no Wayland protocol versions.
+Neither viewer needs dmabuf and neither negotiates a Wayland protocol version, which is why showing the session over VNC works at all. Nesting Hyprland directly in WSLg's Weston does not: that Weston is 9.0.0 and advertises `wl_compositor` v5 against the v6 aquamarine binds.
 
-Dragging the window edge resizes the desktop to match. The new size is stored immediately but applied on the next frame, so it lands within a second or two while anything is redrawing — the bar clock is enough — and waits for input in a fully static session.
+**The viewer runs on Windows when one is installed.** `omarchy setup wsl viewer` fetches TigerVNC's standalone `vncviewer64.exe` — pinned version, pinned SHA256, since SourceForge publishes no signature — into `%LOCALAPPDATA%\Omarchy`, and the launcher starts it through interop. Without it the desktop still opens, in the `tigervnc` viewer inside WSL, which is why that package stays in the image.
+
+The reason to prefer the Windows one is the clipboard. wayvnc already carries the selection both ways over `ext_data_control_manager_v1`, and neatvnc implements the extended clipboard, which is what carries UTF-8 — plain RFB cut text is latin-1. But a viewer running inside WSL bridges that to Xwayland's selection, not to the Windows clipboard. A native client bridges it to Windows.
+
+**The cursor is drawn once, by the viewer.** A headless output has no hardware cursor plane, so Hyprland composites the pointer straight into the framebuffer that wayvnc captures — and wayvnc forwards the cursor to the client as well, so the viewer shows two. `install/wsl/hypr.sh` turns the compositor's cursor off (`cursor.invisible`) and the launcher passes `-AlwaysCursor=1 -CursorType=System`, so the client draws the only pointer, locally and without a round trip.
+
+Dragging the window edge resizes the desktop to match. The viewer logs `SetDesktopSize failed: 4` when it does, which is misleading: result 4 is neatvnc's *request forwarded*, not a refusal. wayvnc applies the resize asynchronously — its debug log reads `Client resolution changed: … which is headless: yes` followed by `success` — and only a `HEADLESS-*` output is eligible, which is why the VKMS one is not the desktop.
 
 ## Files
 
@@ -208,6 +214,7 @@ Dragging the window edge resizes the desktop to match. The new size is stored im
 | `bin/omarchy-apply-wsl` | Root-owned system setup inside the image |
 | `bin/omarchy-launch-wsl-session` | What `startx` runs: the session, wayvnc, and the viewer |
 | `install/wsl/uwsm.sh` | Shims `uwsm-app` and `uwsm`, which need a systemd user manager |
+| `bin/omarchy-setup-wsl-viewer` | Fetches the Windows VNC viewer the desktop opens in |
 | `install/wsl/all.sh` | The ordered step list |
 | `install/wsl/omarchy-wsl-skip.packages` | Packages subtracted from the base manifest |
 | `default/wsl/wsl.conf` | `/etc/wsl.conf` — systemd, interop, resolv.conf generation |
