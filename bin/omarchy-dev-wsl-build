@@ -220,13 +220,6 @@ if [[ -f /mnt/omarchy-build/dev-link ]]; then
   printf 'export OMARCHY_PATH="%s"\n' "$DEV_LINK_PATH" >/etc/omarchy.conf
   chmod 644 /etc/omarchy.conf
 
-  printf 'Defaults secure_path="%s"\n' \
-    "$DEV_LINK_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/bin" \
-    >/tmp/omarchy-dev-path
-  visudo -cf /tmp/omarchy-dev-path >/dev/null
-  install -Dm440 -o root -g root /tmp/omarchy-dev-path /etc/sudoers.d/omarchy-dev-path
-  rm -f /tmp/omarchy-dev-path
-
   export OMARCHY_PATH="$DEV_LINK_PATH"
 else
   export OMARCHY_PATH=/usr/share/omarchy
@@ -235,6 +228,19 @@ fi
 step "Applying Omarchy system setup"
 export PATH="$OMARCHY_PATH/bin:$PATH"
 omarchy-apply-wsl --first-install
+
+if [[ -f /mnt/omarchy-build/dev-link ]]; then
+  step "Putting the checkout's bin on sudo's secure_path"
+  # After the setup above, not with the rest of the dev link: the base rootfs
+  # carries no sudo, so visudo does not exist until install/wsl/packages.sh has
+  # run.
+  printf 'Defaults secure_path="%s"\n' \
+    "$DEV_LINK_PATH/bin:/usr/local/sbin:/usr/local/bin:/usr/bin" \
+    >/tmp/omarchy-dev-path
+  visudo -cf /tmp/omarchy-dev-path >/dev/null
+  install -Dm440 -o root -g root /tmp/omarchy-dev-path /etc/sudoers.d/omarchy-dev-path
+  rm -f /tmp/omarchy-dev-path
+fi
 
 step "Cleaning up for distribution"
 # Undo the container-only sandbox opt-out by restoring the file the repo ships,

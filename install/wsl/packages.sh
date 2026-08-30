@@ -20,8 +20,8 @@ fi
 # ISO supplies sudo and the shortcut icon is never built.
 #   librsvg  - an SVG delegate for ImageMagick, so install/wsl/image.sh can
 #              render the Windows shortcut icon from logo.svg
-#   sudo     - the official Arch WSL rootfs ships it, but the image depends on
-#              it (/etc/sudoers.d/omarchy-wsl, visudo) so name it explicitly
+#   sudo     - absent from the official Arch WSL rootfs, and the image needs it
+#              for /etc/sudoers.d/omarchy-wsl and the visudo that validates it
 #   seatd    - how aquamarine opens the VKMS device. On hardware that is
 #              logind's job, but WSL has no seat for logind to manage
 #   wayvnc   - serves the session on 127.0.0.1, since there is no display to
