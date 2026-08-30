@@ -131,6 +131,8 @@ The same environment is installed at `/etc/profile.d/omarchy-wslg.sh` for ordina
 
 `SUPER` also has to survive the trip from Windows, which is a separate problem: Windows keeps that key for itself unless the viewer grabs the keyboard. TurboVNC does, in a window — see below.
 
+**The viewer sends keysyms, not scan codes.** RFB has no keyboard-layout negotiation; it has two key transports. X11 keysyms name the key outright and are layout independent, while the QEMU Extended Key Event sends raw scan codes for the server's keymap to interpret. TurboVNC prefers the scan-code path by default, and on that path it transmits the **right** Windows key with the extended bit dropped: `E0 5C` becomes plain `0x5C`, which is qnum 92, which is `KEY_KPJPCOMMA` — arriving as keycode 103 with `NoSymbol` and setting no modifier, so no binding fires. The left key is unaffected. `omarchy-launch-wsl-session` therefore passes `-noServerKeyMap`, and both Super keys work. Reported upstream as [TurboVNC #494](https://github.com/TurboVNC/turbovnc/issues/494).
+
 ### The DRM device
 
 **Hyprland needs a DRM device with a display attached, and stock WSL2 kernels have none.** Aquamarine wants a device it can both allocate GBM buffers on and find a CRTC in. WSL2 exposes Microsoft's `/dev/dxg`, which is not a DRM device at all: on a stock kernel `/dev/dri` does not exist.
