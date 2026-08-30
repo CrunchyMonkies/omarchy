@@ -1,0 +1,284 @@
+name: Release
+
+# Publishes a tagged Omarchy WSL release: the importable image, a source
+# tarball, the Windows installer, and a checksums file covering all of them.
+#
+# Tags are calendar versions, YYYYMM.DD.N -- cut one with
+#   git tag "$(date -u +%Y%m.%d.0)"
+# The trailing counter distinguishes a second build on the same day. This is
+# independent of the repository's `version` file, which tracks the upstream
+# Omarchy package version; that file only decides whether the release is marked
+# a prerelease.
+#
+# The VKMS kernel is built separately, by .github/workflows/wsl-kernel.yml, and
+# attached to a release that already exists. It takes hours and only changes
+# when the WSL2 kernel branch moves.
+
+on:
+  push:
+    # Actions tag filters are globs, not regular expressions, so this only
+    # approximates the format. The exact shape is checked again in the job.
+    tags:
+      - "[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build everything and upload it as a workflow artifact without creating a release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    # Arch, not ubuntu-latest: require_command in test/shell.d/base-test.sh
+    # fails rather than skips, and Ubuntu ships lua5.4 instead of lua, fdfind
+    # instead of fd, ImageMagick 6 instead of magick, and no xkbcli at all.
+    container: archlinux:latest
+    steps:
+      - name: Install the test dependencies
+        # git first, so actions/checkout clones rather than falling back to a
+        # tarball download without any history.
+        run: |
+          pacman -Sy --noconfirm --needed \
+            git jq lua ripgrep fd imagemagick libxkbcommon nodejs python \
+            desktop-file-utils
+
+      - uses: actions/checkout@v4
+
+      - name: Set aside the tests that need a maintainer's machine
+        # Three of the 212 shell tests assert against things a clean runner
+        # cannot have, so they fail here for reasons that say nothing about the
+        # commit. Everything else still runs, and any other failure still fails
+        # the gate.
+        #
+        #   unowned-system-paths, snapper - read PKGBUILDs from the sibling
+        #     omarchy-pkgs repository, which is not published anywhere this
+        #     runner can reach.
+        #   hw-hybrid-gpu - runs bin/omarchy-hw-hybrid-gpu, which calls
+        #     omarchy-cmd-present as a bare command. That resolves only where
+        #     Omarchy is already installed. Putting the checkout's own bin/ on
+        #     PATH fixes this one and breaks theme-install-guards, which
+        #     deliberately runs without it.
+        run: |
+          mkdir -p "$RUNNER_TEMP/needs-a-maintainer-machine"
+          mv test/shell.d/unowned-system-paths-test.sh \
+             test/shell.d/snapper-test.sh \
+             test/shell.d/hw-hybrid-gpu-test.sh \
+             "$RUNNER_TEMP/needs-a-maintainer-machine/"
+
+      - name: Run the CLI and shell suites
+        # Tests that need a compositor skip themselves through
+        # require_compositor, so nothing here needs a display. The graphical
+        # acceptance suite is deliberately not part of ./test/all.
+        run: ./test/all
+
+  image:
+    name: Image
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git archive needs the tag object, and the checkout action fetches
+          # only one commit by default.
+          fetch-depth: 0
+
+      - name: Resolve and validate the release tag
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+        run: |
+          if [[ $EVENT_NAME == "push" ]]; then
+            tag=$REF_NAME
+            dry_run=false
+            ref=$REF_NAME
+          else
+            # A manual run has no tag to take a version from, so synthesize
+            # today's. Nothing is published either way.
+            tag=$(date -u +%Y%m.%d.0)
+            dry_run=$DRY_RUN_INPUT
+            ref=$GITHUB_SHA
+          fi
+
+          if [[ ! $tag =~ ^[0-9]{6}\.[0-9]{2}\.[0-9]+$ ]]; then
+            echo "Error: '$tag' is not a YYYYMM.DD.N tag, for example 202608.31.0." >&2
+            exit 1
+          fi
+
+          # The glob filter cannot tell a month from a month number, so 202613
+          # and day 32 both reach here. date does know.
+          year=${tag:0:4}
+          month=${tag:4:2}
+          day=${tag:7:2}
+
+          if ! date -u -d "$year-$month-$day" >/dev/null 2>&1; then
+            echo "Error: '$tag' does not name a real date ($year-$month-$day)." >&2
+            exit 1
+          fi
+
+          # A past date is legitimate -- an old tag can be rebuilt -- so say so
+          # rather than refusing.
+          today=$(date -u +%Y%m.%d)
+          if [[ ${tag%.*} != "$today" ]]; then
+            echo "Note: $tag is not today's UTC date ($today). Building it anyway."
+          fi
+
+          # The `version` file tracks the upstream Omarchy package version on
+          # its own schedule, so it does not gate the tag. It does say whether
+          # what we are shipping is finished.
+          version=$(< version)
+
+          case $version in
+            *alpha*|*beta*|*rc*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+
+          {
+            echo "tag=$tag"
+            echo "ref=$ref"
+            echo "dry_run=$dry_run"
+            echo "prerelease=$prerelease"
+            echo "version=$version"
+          } >>"$GITHUB_OUTPUT"
+
+          echo "Building $tag from Omarchy $version (prerelease: $prerelease, dry run: $dry_run)"
+
+      - name: Make room for the build
+        # README.wsl.md asks for about 50 GB. A hosted runner has nowhere near
+        # that on /, but /mnt is a much larger scratch volume, so move Docker's
+        # storage there rather than trying to slim the build down. The finished
+        # .wsl still lands on / -- docker export | gzip streams, so only the
+        # output file itself needs room there.
+        run: |
+          sudo systemctl stop docker.service docker.socket
+          sudo rm -rf /var/lib/docker
+          sudo mkdir -p /mnt/docker
+          printf '{ "data-root": "/mnt/docker" }\n' | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl start docker.service
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          df -h / /mnt
+
+      - name: Build the WSL image
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        # No --no-dev-link: the fork's WSL work is in this checkout, and the
+        # released /usr/share/omarchy that flag ships instead does not have it.
+        # --output is what makes the tag authoritative; left alone the script
+        # writes its own, differently formatted, date stamp.
+        run: |
+          mkdir -p dist
+          ./bin/omarchy-dev-wsl-build --output "dist/omarchy-$TAG.wsl"
+
+      - name: Build the source tarball
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          REF: ${{ steps.release.outputs.ref }}
+        run: git archive --format=tar.gz --prefix="omarchy-$TAG/" "$REF" -o "dist/omarchy-$TAG.tar.gz"
+
+      - name: Stage the Windows installer
+        run: cp install/wsl/windows/Install-Omarchy.ps1 dist/
+
+      - name: Check the image against GitHub's asset limit
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        # A release asset can be at most 2 GiB and the image has always been
+        # comfortably under it. Fail here rather than partway through an upload
+        # if that ever stops being true -- the fix is a decision (drop packages,
+        # or split the asset and document reassembly), not something to guess at.
+        run: |
+          image="dist/omarchy-$TAG.wsl"
+          limit=$((2 * 1024 * 1024 * 1024))
+          size=$(stat -c%s "$image")
+
+          echo "Image is $(numfmt --to=iec "$size")."
+
+          if (( size > limit )); then
+            echo "Error: the image is over GitHub's 2 GiB limit for a release asset." >&2
+            exit 1
+          fi
+
+      - name: Checksum every asset
+        run: |
+          cd dist
+          : >SHA256SUMS
+
+          for file in *; do
+            if [[ $file != "SHA256SUMS" ]]; then
+              sha256sum "$file" >>SHA256SUMS
+            fi
+          done
+
+          cat SHA256SUMS
+
+      - name: Write the release notes
+        id: notes
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          notes="$RUNNER_TEMP/notes.md"
+
+          cat >"$notes" <<NOTES
+          Omarchy $VERSION for WSL, built from \`$GITHUB_SHA\`.
+
+          ## Install
+
+          From PowerShell on Windows:
+
+          \`\`\`powershell
+          irm https://github.com/$GITHUB_REPOSITORY/releases/latest/download/Install-Omarchy.ps1 | iex
+          \`\`\`
+
+          It verifies the download, installs the kernel, edits \`.wslconfig\`, imports the image and
+          unpacks the kernel modules. \`README.wsl.md\` has the manual equivalent, step by step.
+
+          ## Verify
+
+          \`\`\`bash
+          sha256sum -c SHA256SUMS
+          \`\`\`
+          NOTES
+
+          cat >>"$notes" <<'NOTES'
+
+          ## The kernel
+
+          `startx` needs a WSL2 kernel with VKMS, because stock ones expose no DRM device at all.
+          If `bzImage` and `bzImage-modules.tar.gz` are not attached here yet, they are built
+          separately and added to this release; without them the CLI works and the desktop does not.
+
+          Note that `kernel=` in `.wslconfig` is global to every WSL distribution on the machine.
+          NOTES
+
+          echo "path=$notes" >>"$GITHUB_OUTPUT"
+          cat "$notes"
+
+      - name: Upload the artifacts
+        if: steps.release.outputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: omarchy-${{ steps.release.outputs.tag }}
+          path: dist/
+          retention-days: 7
+
+      - name: Publish the release
+        if: steps.release.outputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          NOTES: ${{ steps.notes.outputs.path }}
+        run: |
+          args=(--title "$TAG" --notes-file "$NOTES")
+
+          if [[ $PRERELEASE == "true" ]]; then
+            args+=(--prerelease)
+          fi
+
+          gh release create "$TAG" "${args[@]}" dist/*
