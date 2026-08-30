@@ -64,6 +64,20 @@ wslg_present() {
   [[ -d /mnt/wslg ]]
 }
 
+# Whether WSLg's services are actually running, which is a different question
+# from whether it is mounted: /mnt/wslg stays mounted whether or not anything
+# came up behind it. WSLGd starts weston, the X server and PulseAudio together,
+# so this socket standing in for all three is fair.
+#
+# The desktop does not need any of them -- the viewer runs on Windows and wayvnc
+# serves it over the loopback -- which is why this is reported rather than
+# enforced. Audio is the part with nowhere else to go: WSL has no sound hardware
+# (/dev/snd carries a timer and nothing else), so PulseAudio's RDP sink is the
+# only way sound leaves the machine.
+wslg_audio_present() {
+  [[ -S /mnt/wslg/PulseServer ]]
+}
+
 # Hyprland's backend needs a DRM device it can both allocate GBM buffers on and
 # find a CRTC in. A connector entry (card0-Virtual-1) is what tells the two
 # apart: dxgkrnl registers a render-only node with nothing to scan out to, and
@@ -122,6 +136,7 @@ diagnose() {
   echo
   echo "  kernel:      $(uname -r)"
   echo "  WSLg:        $(wslg_present && echo "present at /mnt/wslg" || echo "MISSING")"
+  echo "  audio:       $(wslg_audio_present && echo "PulseAudio at /mnt/wslg/PulseServer" || echo "MISSING — no sound")"
   echo "  KMS device:  ${device:-MISSING}"
   echo "  render node: $(stray_render_node && echo "present — see below" || echo "none, as expected")"
   echo "  seatd:       $(seatd_running && echo "running" || echo "NOT RUNNING")"
@@ -166,6 +181,28 @@ seatd is not running, so Hyprland cannot open the DRM device.
 NOTE
   else
     echo "Everything the session needs is present. Run startx."
+  fi
+
+  # Reported after the chain above rather than inside it: no sound is a bad
+  # afternoon, not a session that will not start.
+  if ! wslg_audio_present; then
+    cat <<'NOTE'
+
+There is no audio. WSLg brings up weston and PulseAudio together when the
+distribution starts and puts a socket at /mnt/wslg/PulseServer for clients to
+reach; with that socket missing, WSLg's daemon failed and nothing can play
+sound. WSL has no sound hardware, so there is no second path to fall back to.
+
+WSLg only tries once, when the distribution starts, so a restart is what
+retries it -- from Windows, naming this distribution:
+
+  wsl.exe --terminate <distribution>
+
+If it still has no sound after that, /mnt/wslg/stderr.log says why it failed.
+WSLg sets up shared memory once per virtual machine and a distribution that
+starts later can find it already taken, in which case only 'wsl.exe --shutdown'
+retries it -- for every distribution, and starting this one first.
+NOTE
   fi
 }
 
