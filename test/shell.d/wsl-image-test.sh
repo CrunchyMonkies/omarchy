@@ -106,6 +106,12 @@ grep -qE '^VIEWER_VERSION=[0-9.]+$' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
   fail "omarchy-setup-wsl-viewer pins a version"
 pass "omarchy-setup-wsl-viewer pins both a version and a checksum"
 
+# The image build runs in a container with no Windows to write to, so the
+# shortcut is the setup command's job or nobody's.
+grep -q 'install_shortcut' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
+  fail "omarchy-setup-wsl-viewer creates the Windows desktop shortcut"
+pass "omarchy-setup-wsl-viewer creates the Windows desktop shortcut"
+
 # A headless output has no hardware cursor plane, so the compositor draws the
 # cursor into the frame and the viewer draws another. One of them has to go.
 grep -q 'invisible = true' "$ROOT/install/wsl/hypr.sh" ||
@@ -113,6 +119,13 @@ grep -q 'invisible = true' "$ROOT/install/wsl/hypr.sh" ||
 grep -q 'AlwaysCursor=1' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "omarchy-launch-wsl-session has the viewer draw the cursor instead"
 pass "the cursor is drawn once, by the viewer"
+
+# The image has no password hash, so a lock screen can never be answered. The
+# idle cycle has to be off before it ever locks.
+grep -q 'install -Dm644 /dev/null /etc/skel/.local/state/omarchy/indicators/stay-awake' \
+  "$ROOT/install/wsl/idle.sh" ||
+  fail "install/wsl/idle.sh disables idle locking, which cannot be unlocked here"
+pass "install/wsl/idle.sh disables idle locking"
 
 # run_logged sources each path verbatim, so a typo here fails the whole install
 # halfway through a build rather than at review time.

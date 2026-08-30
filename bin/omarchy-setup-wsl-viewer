@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# omarchy:summary=Install the Windows VNC viewer the WSL desktop opens in
+# omarchy:summary=Set up the Windows side of the WSL desktop: the VNC viewer and a desktop shortcut
 # omarchy:group=setup
 # omarchy:examples=omarchy setup wsl viewer
 
@@ -76,12 +76,73 @@ fi
 viewer_dir="$(wslpath -u "$local_app_data")/Omarchy"
 viewer="$viewer_dir/vncviewer64.exe"
 
+# The image build cannot create this: it runs in a container with no Windows to
+# write to. So it happens here, alongside the viewer, as the other half of
+# setting up the Windows side.
+install_shortcut() {
+  local icon_dir icon script
+
+  # The shortcut has to name the distribution wsl.exe should start.
+  # WSL_DISTRO_NAME is the true answer -- it is what this was imported as --
+  # but a login shell started with a cleared environment does not carry it, so
+  # fall back to the name the image asks Windows to register it under.
+  local distro="${WSL_DISTRO_NAME:-}"
+
+  if [[ -z $distro ]] && [[ -f /etc/wsl-distribution.conf ]]; then
+    distro=$(sed -n 's/^defaultName *= *//p' /etc/wsl-distribution.conf | head -1)
+  fi
+
+  if [[ -z $distro ]]; then
+    echo "Note: could not tell which distribution this is, so no desktop shortcut was created." >&2
+    return 0
+  fi
+
+  icon_dir="$viewer_dir"
+  icon="$icon_dir/omarchy.ico"
+
+  # install/wsl/image.sh renders this from logo.svg for the Start menu entry
+  # WSL creates; the same file serves the desktop shortcut.
+  if [[ -f /usr/lib/wsl/omarchy.ico ]]; then
+    install -Dm644 /usr/lib/wsl/omarchy.ico "$icon"
+  fi
+
+  # wslg.exe rather than wsl.exe: it launches without a console window, so no
+  # terminal flashes up behind the desktop. bash -lc so the session starts from
+  # a login shell, the way it does when the user types startx themselves.
+  script=$(mktemp --suffix=.ps1)
+  cat >"$script" <<PS1
+\$desktop = [Environment]::GetFolderPath('Desktop')
+\$link = Join-Path \$desktop 'Omarchy Desktop.lnk'
+\$shell = New-Object -ComObject WScript.Shell
+\$sc = \$shell.CreateShortcut(\$link)
+\$sc.TargetPath = 'C:\\Program Files\\WSL\\wslg.exe'
+\$sc.Arguments = '-d $distro --cd ~ -- bash -lc startx'
+\$sc.IconLocation = "\$env:LOCALAPPDATA\\Omarchy\\omarchy.ico,0"
+\$sc.Description = 'Start the Omarchy desktop in a window'
+\$sc.WorkingDirectory = \$env:USERPROFILE
+\$sc.Save()
+Write-Output \$link
+PS1
+
+  local link
+  link=$(/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass \
+    -File "$(wslpath -w "$script")" 2>/dev/null | tail -1 | tr -d '\r\n')
+  rm -f "$script"
+
+  if [[ -n $link ]]; then
+    echo "Created the desktop shortcut: $link"
+  else
+    echo "Note: could not create the desktop shortcut; 'startx' still works." >&2
+  fi
+}
+
 installed() {
   [[ -f $viewer ]] && [[ $(sha256sum "$viewer" | cut -d' ' -f1) == "$VIEWER_SHA256" ]]
 }
 
 if (( ! force )) && installed; then
   echo "TigerVNC $VIEWER_VERSION is already installed at $viewer"
+  install_shortcut
   echo "Run 'startx' to open the desktop."
   exit 0
 fi
@@ -114,4 +175,7 @@ install -m755 "$download" "$viewer"
 
 echo
 echo "Installed $viewer"
+
+install_shortcut
+
 echo "Run 'startx' to open the Omarchy desktop in a Windows window."
