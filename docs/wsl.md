@@ -116,8 +116,10 @@ The command installs nothing and changes no Windows configuration — it prints 
 
 ```ini
 [wsl2]
-kernel=C:\Users\<you>\bzImage
+kernel=C:\\Users\\<you>\\bzImage
 ```
+
+Backslashes are escaped: `.wslconfig` reads the value as an escaped string, so a single-backslash path does not resolve and WSL silently boots its own kernel instead.
 
 The `kernel=` setting is global: every distribution on the machine reboots onto it, not just Omarchy. So unpack the modules into each of them:
 
@@ -125,11 +127,13 @@ The `kernel=` setting is global: every distribution on the machine reboots onto 
 sudo tar -C / -xzf ~/bzImage-modules.tar.gz
 ```
 
-Unpacking them is necessary but not sufficient. The kernel loads a module on first use by running `/sbin/modprobe`, and under WSL2 that runs in the utility VM's own root rather than the distribution's, where neither `modprobe` nor `/lib/modules` exists — so nothing loads on demand and every module has to be named up front. Docker is again the clearest case: it needs `nft_compat` for the `iptables` nft backend plus `xt_addrtype`, `xt_MASQUERADE` and `bridge`, and without them `dockerd` fails with `Extension addrtype revision 0 not supported, missing kernel module?`. Record them so they load at boot:
+Unpacking them is necessary but not sufficient. The kernel loads a module on first use by running `/sbin/modprobe`, and under WSL2 that runs in the utility VM's own root rather than the distribution's, where neither `modprobe` nor `/lib/modules` exists — so nothing loads on demand and every module has to be named up front. Docker is again the clearest case: it needs `nft_compat` for the `iptables` nft backend plus `xt_addrtype`, `xt_MASQUERADE`, `xt_conntrack` and `bridge`, and without them `dockerd` fails with `Extension addrtype revision 0 not supported, missing kernel module?` or, from the `DOCKER-CT` chain, `Extension conntrack revision 0 not supported`. Record them so they load at boot:
 
 ```bash
-printf '%s\n' bridge nft_compat xt_addrtype xt_MASQUERADE | sudo tee /etc/modules-load.d/wsl-kernel.conf
+printf '%s\n' bridge nft_compat xt_addrtype xt_MASQUERADE xt_conntrack | sudo tee /etc/modules-load.d/wsl-kernel.conf
 ```
+
+Every build from this command reports the same release string, so a rebuild overwrites the previous build's modules rather than landing beside them. Unpack the tarball on every rebuild: the version magic still matches, so `modprobe` will load a module compiled against a different config without complaint.
 
 Then, from Windows rather than from inside WSL (it ends every distribution):
 

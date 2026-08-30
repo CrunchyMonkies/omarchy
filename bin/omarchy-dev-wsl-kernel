@@ -226,6 +226,13 @@ if [[ -d /mnt/c/Users ]] && omarchy-cmd-present cmd.exe; then
   windows_profile=$(cmd.exe /c "echo %USERPROFILE%" 2>/dev/null | tr -d '\r\n')
 fi
 
+# .wslconfig reads kernel= as an escaped string, so every backslash in the path
+# has to be doubled. A single-backslash path does not resolve and WSL boots its
+# own kernel instead, silently, which looks exactly like a kernel that built
+# wrong.
+windows_kernel="${windows_profile:-C:\\Users\\<you>}\\bzImage"
+windows_kernel="${windows_kernel//\\/\\\\}"
+
 cat <<NOTE
 
 Built $output
@@ -239,7 +246,7 @@ To use it:
   2. Add this to ${windows_profile:-C:\\Users\\<you>}\\.wslconfig
 
        [wsl2]
-       kernel=${windows_profile:-C:\\Users\\<you>}\\bzImage
+       kernel=$windows_kernel
 
   3. Unpack the modules into every distribution that will run on this kernel.
      The kernel setting is global, so that means all of them, not just Omarchy:
@@ -258,5 +265,10 @@ To use it:
 The modules land under /lib/modules/\$(uname -r), and this kernel reports a
 different release than a stock one, so an older directory is left behind
 rather than replaced. Removing it is optional.
+
+Two builds from this command share that release string, though, so a rebuild
+overwrites the previous build's modules in place. Unpack the tarball every
+time: modprobe will happily load a module built against a different config,
+since the version magic still matches.
 
 NOTE
