@@ -19,6 +19,7 @@ set -uo pipefail
 
 VNC_ADDRESS=127.0.0.1
 VNC_PORT=5900
+VNC_DESKTOP_NAME=Omarchy
 HEADLESS_OUTPUT=HEADLESS-1
 
 usage() {
@@ -272,6 +273,7 @@ wait_until() {
 
 session_pid=""
 wayvnc_pid=""
+title_pid=""
 
 # A headless output has no hardware cursor plane, so the compositor composites
 # the pointer into the frame wayvnc captures. UltraVNC hides its own pointer and
@@ -288,6 +290,10 @@ session_gone() {
 }
 
 cleanup() {
+  if [[ -n $title_pid ]]; then
+    kill "$title_pid" 2>/dev/null
+  fi
+
   if [[ -n $wayvnc_pid ]]; then
     kill "$wayvnc_pid" 2>/dev/null
   fi
@@ -373,13 +379,21 @@ WAYLAND_DISPLAY="$wayland_display" dbus-update-activation-environment \
 
 # Loopback only. WSL2 forwards localhost from Windows, so the viewer reaches it
 # either way, and binding wider would put an unauthenticated desktop on the LAN.
-WAYLAND_DISPLAY="$wayland_display" wayvnc -o "$HEADLESS_OUTPUT" "$VNC_ADDRESS" "$VNC_PORT" &
+# --name is what the viewer titles its window. Without it that window is called
+# WayVNC, naming the transport rather than the desktop it is showing.
+WAYLAND_DISPLAY="$wayland_display" wayvnc --name="$VNC_DESKTOP_NAME" \
+  -o "$HEADLESS_OUTPUT" "$VNC_ADDRESS" "$VNC_PORT" &
 wayvnc_pid=$!
 
 if ! wait_until 30 vnc_listening; then
   echo "Error: wayvnc did not start serving the session." >&2
   exit 1
 fi
+
+# From here the title follows the focused window, the way a window manager
+# titles its own. Started after wayvnc is listening, because it talks to it.
+omarchy-hyprland-vnc-title-watch "$VNC_DESKTOP_NAME" &
+title_pid=$!
 
 # Neither viewer needs dmabuf or negotiates a Wayland protocol version, which
 # is why showing the session over VNC works where nesting the compositor in
