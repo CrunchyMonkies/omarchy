@@ -179,6 +179,21 @@ if ! drm_device=$(kms_device); then
   exit 1
 fi
 
+# On hardware the session goes through uwsm, which sources
+# /usr/share/uwsm/env.d/10-omarchy and so builds the session environment. There
+# is no uwsm here (see below), which makes this command the top level -- hence
+# reading env-bootstrap directly rather than relying on $OMARCHY_PATH the way
+# ordinary bin/ commands may. A login shell already has it from
+# /etc/profile.d/omarchy.sh; "wsl -d Omarchy startx" is not a login shell.
+if [[ -z ${OMARCHY_PATH:-} ]]; then
+  source /usr/share/omarchy/default/bash/env-bootstrap
+fi
+
+# The other half of what env.d/10-omarchy does: TERMINAL and EDITOR.
+if [[ -r $OMARCHY_PATH/default/uwsm/default ]]; then
+  source "$OMARCHY_PATH/default/uwsm/default"
+fi
+
 # WSLg's sockets, in case this was reached from a shell that did not read
 # /etc/profile.d/omarchy-wslg.sh (systemd units, ssh, wsl -d ... command).
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/mnt/wslg/runtime-dir}"
@@ -234,20 +249,29 @@ cleanup() {
   fi
 
   if [[ -n $session_pid ]] && kill -0 "$session_pid" 2>/dev/null; then
-    uwsm stop >/dev/null 2>&1
+    hyprctl dispatch exit >/dev/null 2>&1
     wait "$session_pid" 2>/dev/null
   fi
 }
 
 trap cleanup EXIT
 
-# The exact line from default/wayland-sessions/omarchy.desktop, which is what
-# SDDM runs on hardware. Going through uwsm is what sources
-# /usr/share/uwsm/env.d/10-omarchy (hence OMARCHY_PATH) and lets
-# default/hypr/autostart.lua bring up the shell and first-run provisioning.
-# Backgrounded rather than exec'd because the output and the viewer still have
-# to be set up once it is listening.
-uwsm start -g -1 -e -D Hyprland hyprland.desktop &
+# Which wayland-N sockets exist before the compositor adds its own. WSLg's
+# wayland-0 is one of them; whatever appears next is Hyprland's, and that is how
+# its socket name is found further down.
+sockets_before=$(compgen -G "$XDG_RUNTIME_DIR/wayland-[0-9]*" | sort)
+
+# On hardware this is "uwsm start -g -1 -e -D Hyprland hyprland.desktop", the
+# line SDDM runs from default/wayland-sessions/omarchy.desktop. uwsm drives
+# systemd user units, and WSL has no working user manager to drive: Arch's
+# systemd spawns through clone3(CLONE_INTO_CGROUP), user@1000.service's cgroup
+# is held populated by processes WSL keeps in another PID namespace, and the
+# call fails with EBUSY every time. docs/wsl.md covers it.
+#
+# So the compositor is started directly, under the session bus dbus.socket
+# would otherwise have provided. Backgrounded rather than exec'd because the
+# output and the viewer still have to be set up once it is listening.
+dbus-run-session -- Hyprland &
 session_pid=$!
 
 if ! wait_until 60 session_ready; then
@@ -263,14 +287,23 @@ fi
 # disables the VKMS one, in config so a theme reload cannot bring it back.
 hyprctl output create headless >/dev/null
 
-# autostart.lua imports the compositor's environment into the systemd user
-# manager on hyprland.start, which is where its Wayland socket name comes from.
-wayland_display=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^WAYLAND_DISPLAY=//p')
+# The socket that appeared while the compositor was starting.
+wayland_display=$(comm -13 <(echo "$sockets_before") \
+  <(compgen -G "$XDG_RUNTIME_DIR/wayland-[0-9]*" | sort) | head -n 1)
+wayland_display=${wayland_display##*/}
 
 if [[ -z $wayland_display ]]; then
-  echo "Error: the session did not publish WAYLAND_DISPLAY, so it cannot be served." >&2
+  echo "Error: the session opened no Wayland socket, so it cannot be served." >&2
   exit 1
 fi
+
+# default/hypr/autostart.lua does this on hyprland.start, but as
+# "dbus-update-activation-environment --systemd --all", which needs the user
+# manager and so fails here. Without it the xdg-desktop-portal backends are
+# activated with no WAYLAND_DISPLAY and cannot reach the compositor.
+WAYLAND_DISPLAY="$wayland_display" dbus-update-activation-environment \
+  WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP XDG_SESSION_TYPE OMARCHY_PATH \
+  >/dev/null 2>&1
 
 # Loopback only. WSL2 forwards localhost from Windows, so the viewer reaches it
 # either way, and binding wider would put an unauthenticated desktop on the LAN.
