@@ -10,8 +10,16 @@ set -uo pipefail
 
 # This is what `startx` runs on a WSL image (install/wsl/wslg.sh installs the
 # shim). WSL never starts the desktop on its own, so this is the only way in.
+#
+# The session is not shown the way it is on hardware. WSL has no display to
+# scan out to and no GPU Mesa can drive, so Hyprland renders in software onto a
+# headless output, wayvnc serves that on the loopback, and a VNC viewer running
+# as an ordinary WSLg client puts it in a window on the Windows desktop.
+# Resizing that window resizes the desktop. docs/wsl.md covers why.
 
-RENDER_NODE=/dev/dri/renderD128
+VNC_ADDRESS=127.0.0.1
+VNC_PORT=5900
+HEADLESS_OUTPUT=HEADLESS-1
 
 usage() {
   cat <<USAGE
@@ -21,6 +29,8 @@ Usage: startx [--diagnose]
 Starts the Omarchy Hyprland session as a window on the Windows desktop,
 through WSLg. There is no X server involved despite the name — startx is
 just where people reach for a desktop from a WSL shell.
+
+Closing the window ends the session.
 
 --diagnose reports what the session needs and what this machine has,
 without starting anything.
@@ -47,17 +57,43 @@ while (($#)); do
   esac
 done
 
-# WSLg publishes the compositor sockets here. Without it there is no display
-# to render into and nothing below can work.
+# WSLg publishes the compositor sockets here. Without it there is no window to
+# put the session in and nothing below can work.
 wslg_present() {
   [[ -d /mnt/wslg ]]
 }
 
-# Hyprland's backend (aquamarine) allocates its buffers through GBM, which
-# needs a DRM render node even when it is nesting inside another compositor.
-# Stock WSL2 kernels expose /dev/dxg and no DRM device at all.
-render_node_present() {
-  [[ -e $RENDER_NODE ]]
+# Hyprland's backend needs a DRM device it can both allocate GBM buffers on and
+# find a CRTC in. A connector entry (card0-Virtual-1) is what tells the two
+# apart: dxgkrnl registers a render-only node with nothing to scan out to, and
+# aquamarine rejects it with "does not support kms". VKMS is the device that
+# answers, and omarchy-dev-wsl-kernel is what builds it in.
+kms_device() {
+  local card
+
+  for card in /sys/class/drm/card[0-9]*; do
+    [[ $card == *-* ]] && continue
+    compgen -G "$card-*" >/dev/null || continue
+
+    echo "/dev/dri/${card##*/}"
+    return 0
+  done
+
+  return 1
+}
+
+# A kernel carrying the community dxgkrnl DRM patches has one of these. Mesa
+# cannot load a driver for it, but aquamarine still prefers it over the KMS fd
+# and then fails every dmabuf import against it: the desktop renders and screen
+# capture hangs. Nothing here can undo that, so say so rather than start.
+stray_render_node() {
+  compgen -G "/dev/dri/renderD*" >/dev/null
+}
+
+# libseat is how aquamarine opens the device. logind answers on hardware, but
+# it manages seats it finds on a real machine and WSL has none.
+seatd_running() {
+  systemctl is-active --quiet seatd.service
 }
 
 session_running() {
@@ -65,11 +101,16 @@ session_running() {
 }
 
 diagnose() {
+  local device
+  device=$(kms_device) || device=""
+
   echo "Omarchy WSL session diagnostics"
   echo
   echo "  kernel:      $(uname -r)"
   echo "  WSLg:        $(wslg_present && echo "present at /mnt/wslg" || echo "MISSING")"
-  echo "  render node: $(render_node_present && echo "$RENDER_NODE" || echo "MISSING")"
+  echo "  KMS device:  ${device:-MISSING}"
+  echo "  render node: $(stray_render_node && echo "present — see below" || echo "none, as expected")"
+  echo "  seatd:       $(seatd_running && echo "running" || echo "NOT RUNNING")"
   echo "  session:     $(session_running && echo "Hyprland already running" || echo "not running")"
   echo
 
@@ -79,18 +120,35 @@ WSLg is not available in this distribution. Individual GUI apps and the
 desktop both need it. Check that the Windows host is on WSL 2 with WSLg
 enabled (wsl --version), and that /etc/wsl.conf has not disabled interop.
 NOTE
-  elif ! render_node_present; then
-    cat <<NOTE
-No DRM render node. Stock WSL2 kernels ship /dev/dxg and no DRM device, so
-Hyprland cannot allocate buffers and the session will not start. Individual
-GUI apps still work over WSLg — this only blocks the full desktop.
+  elif [[ -z $device ]]; then
+    cat <<'NOTE'
+No DRM device with a display attached. Stock WSL2 kernels ship /dev/dxg and
+no DRM device at all, so Hyprland has nothing to render on and the session
+will not start. Individual GUI apps still work over WSLg — this only blocks
+the full desktop.
 
-To get one, build a WSL2 kernel carrying the dxgkrnl DRM patches:
+To get one, build a WSL2 kernel with VKMS turned on:
 
   omarchy dev wsl kernel
 
 then point Windows at the bzImage it produces (it prints the .wslconfig
 snippet) and run 'wsl --shutdown' to pick it up.
+NOTE
+  elif stray_render_node; then
+    cat <<'NOTE'
+A DRM render node is present. That means this kernel carries the community
+dxgkrnl DRM patches, which Omarchy's kernel no longer applies. Mesa has no
+driver for that node, but Hyprland's backend prefers it anyway and then fails
+every buffer import against it — the desktop draws, and screen capture and
+window resizing do not work.
+
+Rebuild the kernel with 'omarchy dev wsl kernel' and point .wslconfig at it.
+NOTE
+  elif ! seatd_running; then
+    cat <<'NOTE'
+seatd is not running, so Hyprland cannot open the DRM device.
+
+  sudo systemctl enable --now seatd
 NOTE
   else
     echo "Everything the session needs is present. Run startx."
@@ -110,19 +168,12 @@ fi
 
 if session_running; then
   echo "Error: a Hyprland session is already running." >&2
-  echo "Close it (or 'omarchy system logout') before starting another." >&2
+  echo "Close its window (or 'omarchy system logout') before starting another." >&2
   exit 1
 fi
 
-# vgem is the one DRM module a stock WSL2 kernel builds, and loading it is
-# free. It does not give aquamarine a usable GPU, but a kernel that has the
-# dxgkrnl DRM patches may only need the module pulled in.
-if ! render_node_present; then
-  modprobe vgem 2>/dev/null
-fi
-
-if ! render_node_present; then
-  echo "Error: no DRM render node at $RENDER_NODE, so Hyprland cannot start." >&2
+if ! drm_device=$(kms_device); then
+  echo "Error: no DRM device with a display, so Hyprland cannot start." >&2
   echo >&2
   diagnose >&2
   exit 1
@@ -130,21 +181,109 @@ fi
 
 # WSLg's sockets, in case this was reached from a shell that did not read
 # /etc/profile.d/omarchy-wslg.sh (systemd units, ssh, wsl -d ... command).
-export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/mnt/wslg/runtime-dir}"
 export DISPLAY="${DISPLAY:-:0}"
 export PULSE_SERVER="${PULSE_SERVER:-unix:/mnt/wslg/PulseServer}"
 
-# Nest inside WSLg's Weston instead of looking for a DRM device to modeset on:
-# WSLg owns the display, and the dxgkrnl node is render-only either way.
-export AQ_FORCE_BACKEND=wayland
+# WSLg's own Wayland socket is in the environment of any shell that read that
+# profile drop-in, and aquamarine picks its nested Wayland backend whenever it
+# sees one. That backend cannot host Hyprland: WSLg's Weston is 9.0.0 and
+# advertises wl_compositor v5 against the v6 aquamarine binds. Drive the DRM
+# device directly instead.
+unset WAYLAND_DISPLAY
+
+export AQ_DRM_DEVICES="$drm_device"
 export AQ_NO_MODIFIERS=1
-export WLR_RENDERER_ALLOW_SOFTWARE=1
+
+# There is no GPU here Mesa can drive, and without being told so EGL dies with
+# "DRI2: failed to load driver". llvmpipe is the whole renderer.
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+
 export XDG_CURRENT_DESKTOP=Hyprland
 export XDG_SESSION_TYPE=wayland
+
+session_ready() {
+  hyprctl monitors >/dev/null 2>&1
+}
+
+vnc_listening() {
+  (exec 3<>"/dev/tcp/$VNC_ADDRESS/$VNC_PORT") 2>/dev/null
+}
+
+wait_until() {
+  local deadline=$((SECONDS + $1))
+  shift
+
+  while ((SECONDS < deadline)); do
+    if "$@"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+session_pid=""
+wayvnc_pid=""
+
+cleanup() {
+  if [[ -n $wayvnc_pid ]]; then
+    kill "$wayvnc_pid" 2>/dev/null
+  fi
+
+  if [[ -n $session_pid ]] && kill -0 "$session_pid" 2>/dev/null; then
+    uwsm stop >/dev/null 2>&1
+    wait "$session_pid" 2>/dev/null
+  fi
+}
+
+trap cleanup EXIT
 
 # The exact line from default/wayland-sessions/omarchy.desktop, which is what
 # SDDM runs on hardware. Going through uwsm is what sources
 # /usr/share/uwsm/env.d/10-omarchy (hence OMARCHY_PATH) and lets
 # default/hypr/autostart.lua bring up the shell and first-run provisioning.
-exec uwsm start -g -1 -e -D Hyprland hyprland.desktop
+# Backgrounded rather than exec'd because the output and the viewer still have
+# to be set up once it is listening.
+uwsm start -g -1 -e -D Hyprland hyprland.desktop &
+session_pid=$!
+
+if ! wait_until 60 session_ready; then
+  echo "Error: the Hyprland session did not come up." >&2
+  echo "Run 'startx --diagnose', and see 'omarchy debug' for the session log." >&2
+  exit 1
+fi
+
+# wayvnc only resizes an output whose name starts with HEADLESS-, and the VKMS
+# output cannot take a custom mode: it offers the fixed list a driver with no
+# EDID gets and nothing else. So the desktop lives on a headless output, which
+# accepts whatever size the viewer window asks for. install/wsl/hypr.sh is what
+# disables the VKMS one, in config so a theme reload cannot bring it back.
+hyprctl output create headless >/dev/null
+
+# autostart.lua imports the compositor's environment into the systemd user
+# manager on hyprland.start, which is where its Wayland socket name comes from.
+wayland_display=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^WAYLAND_DISPLAY=//p')
+
+if [[ -z $wayland_display ]]; then
+  echo "Error: the session did not publish WAYLAND_DISPLAY, so it cannot be served." >&2
+  exit 1
+fi
+
+# Loopback only. WSL2 forwards localhost from Windows, so the viewer reaches it
+# either way, and binding wider would put an unauthenticated desktop on the LAN.
+WAYLAND_DISPLAY="$wayland_display" wayvnc -o "$HEADLESS_OUTPUT" "$VNC_ADDRESS" "$VNC_PORT" &
+wayvnc_pid=$!
+
+if ! wait_until 30 vnc_listening; then
+  echo "Error: wayvnc did not start serving the session." >&2
+  exit 1
+fi
+
+# The viewer is an ordinary WSLg X11 client, which is what makes this a real
+# window on the Windows desktop. It needs no dmabuf and negotiates no Wayland
+# protocol versions, which is why this works where nesting does not.
+# -RemoteResize is what turns a window drag into a desktop resize.
+vncviewer -SecurityTypes None -RemoteResize=1 "$VNC_ADDRESS:$VNC_PORT"
