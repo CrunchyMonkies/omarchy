@@ -31,6 +31,28 @@ grep -q 'systemctl --root=/ set-default multi-user.target' "$ROOT/install/wsl/se
   fail "install/wsl/services.sh boots to multi-user.target"
 pass "install/wsl/services.sh boots to multi-user.target"
 
+# The session reaches the VKMS device through libseat, and logind has no seat to
+# offer it here. Without seatd running, startx cannot open /dev/dri/card0.
+grep -q 'systemctl --root=/ enable seatd.service' "$ROOT/install/wsl/services.sh" ||
+  fail "install/wsl/services.sh enables seatd.service"
+pass "install/wsl/services.sh enables seatd.service"
+
+# There is no display to scan out to, so the session is only reachable through
+# wayvnc and a viewer. Both are WSL-only additions the base manifest never names.
+for package in seatd wayvnc tigervnc; do
+  grep -q "packages+=(.*\b$package\b.*)" "$ROOT/install/wsl/packages.sh" ||
+    fail "install/wsl/packages.sh installs $package"
+done
+pass "install/wsl/packages.sh installs the session's seat and VNC packages"
+
+# oobe.sh filters the recorded groups to ones that exist, so a name that never
+# gets written here is dropped silently rather than failing the first boot.
+for group in seat video render; do
+  grep -q "wsl_session_groups=(.*\b$group\b.*)" "$ROOT/install/wsl/groups.sh" ||
+    fail "install/wsl/groups.sh records the $group group"
+done
+pass "install/wsl/groups.sh records the session's device groups"
+
 # run_logged sources each path verbatim, so a typo here fails the whole install
 # halfway through a build rather than at review time.
 missing=""
