@@ -8,6 +8,8 @@ This is a development and evaluation target, not a supported install path. It ex
 
 ## Building
 
+Building is not the only way to get an image. Tagged releases carry a prebuilt `.wsl`, the VKMS kernel, and a Windows installer that does the whole Windows side; `README.wsl.md` covers that path. `.github/workflows/release.yml` runs this command on a tag, and `.github/workflows/wsl-kernel.yml` builds the kernel separately, because it takes hours and only changes when the WSL2 kernel branch moves.
+
 ```bash
 omarchy dev wsl build --output ~/omarchy.wsl
 ```
