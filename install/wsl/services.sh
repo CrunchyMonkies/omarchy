@@ -9,6 +9,11 @@
 # are what matter either way; they take effect on the next boot.
 systemctl --root=/ set-default multi-user.target
 
+# Hyprland reaches the VKMS device through libseat. logind is what answers on
+# hardware, but it manages seats it finds on a real machine and WSL has none,
+# so seatd has to be the backend here.
+systemctl --root=/ enable seatd.service
+
 # The sddm package is not installed here, but mask the unit anyway: it is the
 # only thing that ever starts the compositor, and a later pacman -S must not be
 # able to bring the desktop up at boot behind the user's back.

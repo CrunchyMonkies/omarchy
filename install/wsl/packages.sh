@@ -18,11 +18,16 @@ fi
 
 # WSL-only additions the base manifest has no reason to carry: on hardware the
 # ISO supplies sudo and the shortcut icon is never built.
-#   librsvg - an SVG delegate for ImageMagick, so install/wsl/image.sh can
-#             render the Windows shortcut icon from logo.svg
-#   sudo    - the official Arch WSL rootfs ships it, but the image depends on
-#             it (/etc/sudoers.d/omarchy-wsl, visudo) so name it explicitly
-packages+=(librsvg sudo)
+#   librsvg  - an SVG delegate for ImageMagick, so install/wsl/image.sh can
+#              render the Windows shortcut icon from logo.svg
+#   sudo     - the official Arch WSL rootfs ships it, but the image depends on
+#              it (/etc/sudoers.d/omarchy-wsl, visudo) so name it explicitly
+#   seatd    - how aquamarine opens the VKMS device. On hardware that is
+#              logind's job, but WSL has no seat for logind to manage
+#   wayvnc   - serves the session on 127.0.0.1, since there is no display to
+#              scan out to. See omarchy-launch-wsl-session
+#   tigervnc - the viewer that turns that into a WSLg window, over plain X11
+packages+=(librsvg sudo seatd wayvnc tigervnc)
 
 echo "Installing ${#packages[@]} packages ($(read_package_list "$skip_list" | wc -l) skipped as WSL-inert)"
 
