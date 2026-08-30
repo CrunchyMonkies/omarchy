@@ -82,18 +82,16 @@ viewer="$viewer_dir/vncviewer64.exe"
 install_shortcut() {
   local icon_dir icon script
 
-  # The shortcut has to name the distribution wsl.exe should start.
-  # WSL_DISTRO_NAME is the true answer -- it is what this was imported as --
-  # but a login shell started with a cleared environment does not carry it, so
-  # fall back to the name the image asks Windows to register it under.
+  # The shortcut has to name the distribution wsl.exe should start, and
+  # WSL_DISTRO_NAME is the only thing that knows what this was imported as.
+  # defaultName in /etc/wsl-distribution.conf is not a fallback: it is the name
+  # the image asks for, which is not the name it necessarily got, so guessing
+  # from it produces a shortcut that starts a different distribution.
   local distro="${WSL_DISTRO_NAME:-}"
 
-  if [[ -z $distro ]] && [[ -f /etc/wsl-distribution.conf ]]; then
-    distro=$(sed -n 's/^defaultName *= *//p' /etc/wsl-distribution.conf | head -1)
-  fi
-
   if [[ -z $distro ]]; then
-    echo "Note: could not tell which distribution this is, so no desktop shortcut was created." >&2
+    echo "Note: WSL_DISTRO_NAME is unset -- run this from a shell inside the" >&2
+    echo "distribution so the shortcut names the right one. Nothing was created." >&2
     return 0
   fi
 
