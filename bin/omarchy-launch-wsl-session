@@ -104,16 +104,13 @@ session_running() {
 # That is what gets the Windows clipboard: wayvnc already carries the selection
 # both ways over ext_data_control_manager_v1, but a viewer inside WSL bridges it
 # to Xwayland instead. Same cmd.exe idiom as default/wsl/oobe.sh.
-windows_viewer() {
-  local local_app_data viewer
+windows_viewer_dir() {
+  local local_app_data
 
   local_app_data=$(/mnt/c/Windows/System32/cmd.exe /c "echo %LOCALAPPDATA%" 2>/dev/null | tail -1 | tr -d '\r\n')
   [[ -n $local_app_data ]] || return 1
 
-  viewer="$(wslpath -u "$local_app_data")/Omarchy/vncviewer64.exe"
-  [[ -f $viewer ]] || return 1
-
-  echo "$viewer"
+  echo "$(wslpath -u "$local_app_data")/Omarchy"
 }
 
 diagnose() {
@@ -276,6 +273,16 @@ wait_until() {
 session_pid=""
 wayvnc_pid=""
 
+# A headless output has no hardware cursor plane, so the compositor composites
+# the pointer into the frame wayvnc captures. UltraVNC hides its own pointer and
+# expects exactly that, so the default is to leave it on. The TigerVNC viewers
+# draw a pointer of their own instead, and would show two -- so for those, and
+# only those, the compositor's is turned off. hyprctl keyword does not work
+# against the Lua config; eval is what it asks for.
+hide_compositor_cursor() {
+  hyprctl eval 'hl.config({ cursor = { invisible = true } })' >/dev/null 2>&1
+}
+
 session_gone() {
   ! kill -0 "$session_pid" 2>/dev/null
 }
@@ -378,7 +385,10 @@ fi
 # forwards it as well, and the viewer ends up showing two. With the compositor
 # one off, wayvnc sends an invisible cursor and this is what puts a real one
 # back -- drawn by the client, so it costs no round trip.
-viewer_options=(
+# TigerVNC's dialect. RemoteResize is on, so dragging the window resizes the
+# desktop; the viewer logs "SetDesktopSize failed: 4" when it does, which is
+# misleading -- 4 is neatvnc's "request forwarded", and wayvnc then applies it.
+tigervnc_options=(
   -RemoteResize=1
   -AcceptClipboard=1
   -SendClipboard=1
@@ -386,10 +396,54 @@ viewer_options=(
   -CursorType=System
 )
 
-if viewer=$(windows_viewer); then
-  "$viewer" -SecurityTypes=None "${viewer_options[@]}" "$VNC_ADDRESS:$VNC_PORT"
+viewer_dir=$(windows_viewer_dir) || viewer_dir=""
+turbovnc_jar="$viewer_dir/TurboVNC/java/VncViewer.jar"
+
+# TurboVNC first: it is the only one of the three that grabs the keyboard in a
+# window, and without a grab Windows keeps SUPER for itself and every Omarchy
+# binding is dead. TigerVNC grabs only in full screen (upstream issue #1899).
+#
+# The viewer is Java with its own JRE. This is what vncviewer.bat does, minus
+# the console window: javaw rather than java, and java.library.path pointing at
+# turbovnchelper.dll, which is what implements the grab.
+#
+# host::port, with two colons -- a single colon means a display number, so
+# 127.0.0.1:5900 would be port 11800.
+#
+# DesktopSize=Auto resizes the desktop to the window. That needs the patched
+# neatvnc built by install/wsl/neatvnc.sh: stock neatvnc never announces the
+# screen layout at connect, so TurboVNC concludes resizing is unsupported at
+# its first framebuffer update and disables it permanently. The clipboard is
+# Scale is pinned to 100 because the viewer persists parameters between runs,
+# and any automatic scaling silently disables desktop resizing -- the two are
+# mutually exclusive. The clipboard is left to
+# its defaults, which are on both ways: RecvClipboard and SendClipboard are
+# boolean parameters that take no value, and "-RecvClipboard 1" makes the
+# viewer read the 1 as the host and sit on a connection dialog instead. That
+# is also why the toolbar is turned off with -noToolbar rather than
+# "-Toolbar 0", which the viewer rejects outright.
+if [[ -n $viewer_dir ]] && [[ -f $turbovnc_jar ]]; then
+  echo "CTRL-ALT-SHIFT-G toggles the keyboard grab; SUPER needs it held." >&2
+  "$viewer_dir/TurboVNC/java/jre/bin/javaw.exe" \
+    -Dsun.java2d.d3d=false \
+    "-Djava.library.path=$(wslpath -w "$viewer_dir/TurboVNC/java")" \
+    -jar "$(wslpath -w "$turbovnc_jar")" \
+    -reqarch amd64 \
+    -GrabKeyboard Always \
+    -SecurityTypes None \
+    -DesktopSize Auto \
+    -Scale 100 \
+    -noToolbar \
+    "$VNC_ADDRESS::$VNC_PORT"
+elif [[ -n $viewer_dir ]] && [[ -f $viewer_dir/vncviewer64.exe ]]; then
+  echo "Using TigerVNC: SUPER only reaches the desktop in full screen (F8 to toggle)." >&2
+  echo "'omarchy setup wsl viewer' installs UltraVNC, which sends it in a window." >&2
+  hide_compositor_cursor
+  "$viewer_dir/vncviewer64.exe" -SecurityTypes=None "${tigervnc_options[@]}" "$VNC_ADDRESS:$VNC_PORT"
 else
   echo "No Windows VNC viewer found, so the desktop opens in the one inside WSL." >&2
-  echo "That one cannot reach the Windows clipboard; 'omarchy setup wsl viewer' installs one that can." >&2
-  vncviewer -SecurityTypes None "${viewer_options[@]}" "$VNC_ADDRESS:$VNC_PORT"
+  echo "That one cannot reach the Windows clipboard and never receives SUPER;" >&2
+  echo "'omarchy setup wsl viewer' installs one that can." >&2
+  hide_compositor_cursor
+  vncviewer -SecurityTypes None "${tigervnc_options[@]}" "$VNC_ADDRESS:$VNC_PORT"
 fi
