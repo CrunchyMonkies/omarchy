@@ -3,8 +3,13 @@
   Installs Omarchy as a WSL distribution on Windows.
 
 .DESCRIPTION
-  Downloads a published Omarchy release, verifies it, installs the VKMS kernel
-  the desktop needs, imports the image, and unpacks the kernel modules.
+  Installs the VKMS kernel the desktop needs, imports an Omarchy .wsl image, and
+  unpacks the kernel modules.
+
+  The image is built locally -- 'omarchy dev wsl build' -- and passed with
+  -ImagePath. It gzips to around 5 GB, well past GitHub's limit for a release
+  asset, so it is not published. The kernel is: it takes hours to build, so this
+  fetches it from a release unless you point at your own.
 
   This is the one part of the WSL setup that cannot live inside the image: it
   runs on Windows, before any Omarchy distribution exists. See README.wsl.md for
@@ -13,7 +18,8 @@
   Nothing here needs administrator rights, and none are requested.
 
 .PARAMETER Tag
-  The release to install, for example 202608.31.0. Defaults to the latest.
+  The release to take the kernel from, for example 202608.31.0. Defaults to the
+  latest.
 
 .PARAMETER Name
   The name to register the distribution under. Defaults to Omarchy.
@@ -22,12 +28,13 @@
   Where to store the distribution. Defaults to %USERPROFILE%\WSL\Omarchy.
 
 .PARAMETER ImagePath
-  Install a locally built .wsl image instead of downloading one. This is how you
-  install what 'omarchy dev wsl build' just produced.
+  The .wsl image to import, as produced by 'omarchy dev wsl build'. Required:
+  there is no published image to fall back on.
 
 .PARAMETER KernelPath
-  Install a locally built bzImage instead of downloading one. Its modules are
-  taken from <KernelPath>-modules.tar.gz, which is where the build writes them.
+  Install a locally built bzImage instead of fetching the release's. Its modules
+  are taken from <KernelPath>-modules.tar.gz, which is where the build writes
+  them.
 
 .PARAMETER SkipKernel
   Import the image without touching the kernel or .wslconfig. The CLI works;
@@ -38,13 +45,13 @@
   kernel= line in .wslconfig.
 
 .EXAMPLE
-  irm https://github.com/CrunchyMonkies/omarchy/releases/latest/download/Install-Omarchy.ps1 | iex
-
-.EXAMPLE
-  .\Install-Omarchy.ps1 -Tag 202608.31.0 -Name Omarchy-test
+  .\Install-Omarchy.ps1 -ImagePath ~\omarchy.wsl
 
 .EXAMPLE
   .\Install-Omarchy.ps1 -ImagePath ~\omarchy.wsl -KernelPath ~\bzImage
+
+.EXAMPLE
+  .\Install-Omarchy.ps1 -ImagePath ~\omarchy.wsl -Name Omarchy-test -Force
 #>
 
 [CmdletBinding()]
@@ -260,7 +267,7 @@ function Read-Sha256Sums {
   return $sums
 }
 
-function Get-ReleaseArtifacts {
+function Get-ReleaseKernel {
   param(
     [string] $Tag,
     [string] $Directory
@@ -274,37 +281,27 @@ function Get-ReleaseArtifacts {
   $assets = @{}
   foreach ($asset in $release.assets) { $assets[$asset.name] = $asset }
 
+  if (-not ($assets.ContainsKey('bzImage') -and $assets.ContainsKey('bzImage-modules.tar.gz'))) {
+    Write-Warn "$($release.tag_name) carries no kernel yet; it is built separately and can lag the release."
+    return $null
+  }
+
   if (-not $assets.ContainsKey('SHA256SUMS')) {
     Stop-WithError "The $($release.tag_name) release carries no SHA256SUMS, so nothing can be verified."
   }
 
-  Write-Step 'Downloading'
+  Write-Step 'Downloading the kernel'
 
   $sumsPath = Save-Asset -Asset $assets['SHA256SUMS'] -Directory $Directory
   $sums = Read-Sha256Sums -Path $sumsPath
 
-  $images = @($assets.Keys | Where-Object { $_ -like 'omarchy-*.wsl' } | Sort-Object)
+  $kernel = Save-Asset -Asset $assets['bzImage'] -Directory $Directory
+  Assert-Checksum -Path $kernel -Sums $sums
 
-  if ($images.Count -eq 0) {
-    Stop-WithError "The $($release.tag_name) release carries no .wsl image."
-  }
-
-  $image = Save-Asset -Asset $assets[$images[0]] -Directory $Directory
-  Assert-Checksum -Path $image -Sums $sums
-
-  $kernel = $null
-  $modules = $null
-
-  if ($assets.ContainsKey('bzImage') -and $assets.ContainsKey('bzImage-modules.tar.gz')) {
-    $kernel = Save-Asset -Asset $assets['bzImage'] -Directory $Directory
-    Assert-Checksum -Path $kernel -Sums $sums
-
-    $modules = Save-Asset -Asset $assets['bzImage-modules.tar.gz'] -Directory $Directory
-    Assert-Checksum -Path $modules -Sums $sums
-  }
+  $modules = Save-Asset -Asset $assets['bzImage-modules.tar.gz'] -Directory $Directory
+  Assert-Checksum -Path $modules -Sums $sums
 
   return @{
-    Image   = $image
     Kernel  = $kernel
     Modules = $modules
   }
@@ -498,46 +495,67 @@ function Install-Modules {
 Write-Host ''
 Write-Host 'Omarchy for WSL' -ForegroundColor Cyan
 
+if (-not $ImagePath) {
+  Stop-WithError @'
+-ImagePath is required.
+
+The .wsl image is not published -- it gzips to around 5 GB, past what a GitHub
+release asset may be -- so build it from a checkout first:
+
+  omarchy dev wsl build --output ~/omarchy.wsl
+
+then point this at it:
+
+  .\Install-Omarchy.ps1 -ImagePath C:\path\to\omarchy.wsl
+
+README.wsl.md covers the whole procedure.
+'@
+}
+
+if (-not (Test-Path $ImagePath)) {
+  Stop-WithError "No such image: $ImagePath"
+}
+
 Assert-Prerequisites
 
 $workspace = Join-Path ([System.IO.Path]::GetTempPath()) "omarchy-install-$PID"
 New-Item -ItemType Directory -Path $workspace -Force | Out-Null
 
 try {
-  if ($ImagePath) {
-    # A locally built image has nothing published to check it against, so it is
-    # taken on trust -- you built it.
-    Write-Step 'Using local artifacts'
+  # The image is built, never downloaded: it gzips to around 5 GB, past what a
+  # release asset may be. Taken on trust, because there is nothing published to
+  # check it against -- you built it.
+  Write-Step 'Using the image you built'
 
-    $image = (Resolve-Path -Path $ImagePath).Path
-    Write-Note $image
+  $image = (Resolve-Path -Path $ImagePath).Path
+  Write-Note $image
 
-    $kernel = $null
-    $modules = $null
+  $kernel = $null
+  $modules = $null
 
-    if ($KernelPath) {
-      $kernel = (Resolve-Path -Path $KernelPath).Path
-      Write-Note $kernel
+  if ($KernelPath) {
+    $kernel = (Resolve-Path -Path $KernelPath).Path
+    Write-Note $kernel
 
-      # 'omarchy dev wsl kernel' writes the modules next to the bzImage under
-      # this exact name.
-      $candidate = "$kernel-modules.tar.gz"
-      if (Test-Path $candidate) {
-        $modules = $candidate
-        Write-Note $modules
-      } else {
-        Write-Warn "No $candidate beside the kernel; modules will not be installed."
-      }
+    # 'omarchy dev wsl kernel' writes the modules next to the bzImage under
+    # this exact name.
+    $candidate = "$kernel-modules.tar.gz"
+
+    if (Test-Path $candidate) {
+      $modules = $candidate
+      Write-Note $modules
+    } else {
+      Write-Warn "No $candidate beside the kernel; modules will not be installed."
     }
-  } else {
-    if ($KernelPath) {
-      Stop-WithError '-KernelPath only applies with -ImagePath. Drop it to install a published release.'
-    }
+  } elseif (-not $SkipKernel) {
+    # The kernel is small enough to publish and takes hours to build, so it is
+    # the one piece worth fetching.
+    $fetched = Get-ReleaseKernel -Tag $Tag -Directory $workspace
 
-    $artifacts = Get-ReleaseArtifacts -Tag $Tag -Directory $workspace
-    $image = $artifacts.Image
-    $kernel = $artifacts.Kernel
-    $modules = $artifacts.Modules
+    if ($fetched) {
+      $kernel = $fetched.Kernel
+      $modules = $fetched.Modules
+    }
   }
 
   $kernelInstalled = $false
@@ -547,8 +565,8 @@ try {
     Write-Warn "The CLI will work. 'startx' will not: a stock WSL2 kernel has no DRM device."
   } elseif (-not $kernel) {
     Write-Step 'No kernel available'
-    Write-Warn 'This release carries no bzImage, so the desktop cannot start on it.'
-    Write-Warn "The CLI works. Build one with 'omarchy dev wsl kernel' to get 'startx'."
+    Write-Warn 'Nothing to install, so the desktop cannot start.'
+    Write-Warn "The CLI works. Build one with 'omarchy dev wsl kernel' and pass -KernelPath."
   } else {
     Install-Kernel -KernelPath $kernel -ModulesPath $modules
     $kernelInstalled = $true

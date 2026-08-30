@@ -1,7 +1,12 @@
 name: Release
 
-# Publishes a tagged Omarchy WSL release: the importable image, a source
-# tarball, the Windows installer, and a checksums file covering all of them.
+# Publishes a tagged Omarchy WSL release: the Windows installer, a source
+# tarball, and a checksums file covering them.
+#
+# The .wsl image is deliberately not here. It gzips to around 5 GB, which is
+# well past GitHub's 2 GiB limit for a single release asset, so it is built
+# from a checkout with `omarchy dev wsl build` instead. README.wsl.md is the
+# procedure.
 #
 # Tags are calendar versions, YYYYMM.DD.N -- cut one with
 #   git tag "$(date -u +%Y%m.%d.0)"
@@ -91,11 +96,11 @@ jobs:
           chown -R tester:tester "$GITHUB_WORKSPACE"
           runuser -u tester -- env HOME=/home/tester ./test/all
 
-  image:
-    name: Image
+  release:
+    name: Release
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -165,52 +170,6 @@ jobs:
 
           echo "Building $tag from Omarchy $version (prerelease: $prerelease, dry run: $dry_run)"
 
-      - name: Make room for the build
-        # README.wsl.md asks for about 50 GB. A hosted runner has nowhere near
-        # that on /, but /mnt is a much larger scratch volume, so move Docker's
-        # storage there rather than trying to slim the build down. The finished
-        # .wsl still lands on / -- docker export | gzip streams, so only the
-        # output file itself needs room there.
-        run: |
-          sudo systemctl stop docker.service docker.socket
-          sudo rm -rf /var/lib/docker
-          sudo mkdir -p /mnt/docker
-          printf '{ "data-root": "/mnt/docker" }\n' | sudo tee /etc/docker/daemon.json >/dev/null
-          sudo systemctl start docker.service
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
-          df -h / /mnt
-
-      - name: Build the WSL image
-        env:
-          TAG: ${{ steps.release.outputs.tag }}
-        # No --no-dev-link: the fork's WSL work is in this checkout, and the
-        # released /usr/share/omarchy that flag ships instead does not have it.
-        # --output is what makes the tag authoritative; left alone the script
-        # writes its own, differently formatted, date stamp.
-        run: |
-          mkdir -p dist
-
-          # Provisioning inside the image logs to a file rather than stdout, so
-          # a failed step otherwise surfaces as nothing but its exit code.
-          # --keep-container leaves the container behind to copy that log out
-          # of; the runner is thrown away either way.
-          set +e
-          ./bin/omarchy-dev-wsl-build --keep-container --output "dist/omarchy-$TAG.wsl"
-          status=$?
-          set -e
-
-          if (( status != 0 )); then
-            container=$(docker ps -a --filter name=omarchy-wsl-build- --format '{{.Names}}' | head -1)
-
-            if [[ -n $container ]]; then
-              echo "----- /var/log/omarchy-install.log -----"
-              docker cp "$container:/var/log/omarchy-install.log" "$RUNNER_TEMP/omarchy-install.log" 2>/dev/null &&
-                cat "$RUNNER_TEMP/omarchy-install.log"
-            fi
-
-            exit $status
-          fi
-
       - name: Build the source tarball
         env:
           TAG: ${{ steps.release.outputs.tag }}
@@ -219,25 +178,6 @@ jobs:
 
       - name: Stage the Windows installer
         run: cp install/wsl/windows/Install-Omarchy.ps1 dist/
-
-      - name: Check the image against GitHub's asset limit
-        env:
-          TAG: ${{ steps.release.outputs.tag }}
-        # A release asset can be at most 2 GiB and the image has always been
-        # comfortably under it. Fail here rather than partway through an upload
-        # if that ever stops being true -- the fix is a decision (drop packages,
-        # or split the asset and document reassembly), not something to guess at.
-        run: |
-          image="dist/omarchy-$TAG.wsl"
-          limit=$((2 * 1024 * 1024 * 1024))
-          size=$(stat -c%s "$image")
-
-          echo "Image is $(numfmt --to=iec "$size")."
-
-          if (( size > limit )); then
-            echo "Error: the image is over GitHub's 2 GiB limit for a release asset." >&2
-            exit 1
-          fi
 
       - name: Checksum every asset
         run: |
@@ -260,35 +200,46 @@ jobs:
           notes="$RUNNER_TEMP/notes.md"
 
           cat >"$notes" <<NOTES
-          Omarchy $VERSION for WSL, built from \`$GITHUB_SHA\`.
+          Omarchy $VERSION for WSL, from \`$GITHUB_SHA\`.
+
+          ## The image is built locally
+
+          The \`.wsl\` image is not published here. It gzips to well over GitHub's 2 GiB
+          limit for a release asset, so it is built from a checkout instead:
+
+          \`\`\`bash
+          omarchy dev wsl build --output ~/omarchy.wsl
+          \`\`\`
+
+          \`README.wsl.md\` covers that end to end, including the Windows side.
+
+          ## What is here
+
+          - \`bzImage\` and \`bzImage-modules.tar.gz\` -- the VKMS kernel \`startx\` needs, because
+            stock WSL2 kernels expose no DRM device. It takes hours to build, which is why it
+            is published rather than left to you. Attached separately; if it is not here yet,
+            it is still building.
+          - \`Install-Omarchy.ps1\` -- installs the kernel, edits \`.wslconfig\`, imports the
+            image you built and unpacks the modules.
+          - the source tarball and \`SHA256SUMS\`.
 
           ## Install
 
-          From PowerShell on Windows:
+          From PowerShell on Windows, with the image you built:
 
           \`\`\`powershell
-          irm https://github.com/$GITHUB_REPOSITORY/releases/latest/download/Install-Omarchy.ps1 | iex
+          .\\Install-Omarchy.ps1 -ImagePath C:\\path\\to\\omarchy.wsl
           \`\`\`
 
-          It verifies the download, installs the kernel, edits \`.wslconfig\`, imports the image and
-          unpacks the kernel modules. \`README.wsl.md\` has the manual equivalent, step by step.
+          It fetches this release's kernel unless you pass \`-KernelPath\` or \`-SkipKernel\`.
 
           ## Verify
 
           \`\`\`bash
           sha256sum -c SHA256SUMS
           \`\`\`
-          NOTES
 
-          cat >>"$notes" <<'NOTES'
-
-          ## The kernel
-
-          `startx` needs a WSL2 kernel with VKMS, because stock ones expose no DRM device at all.
-          If `bzImage` and `bzImage-modules.tar.gz` are not attached here yet, they are built
-          separately and added to this release; without them the CLI works and the desktop does not.
-
-          Note that `kernel=` in `.wslconfig` is global to every WSL distribution on the machine.
+          Note that \`kernel=\` in \`.wslconfig\` is global to every WSL distribution on the machine.
           NOTES
 
           echo "path=$notes" >>"$GITHUB_OUTPUT"
@@ -298,7 +249,7 @@ jobs:
         if: steps.release.outputs.dry_run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: omarchy-${{ steps.release.outputs.tag }}
+          name: omarchy-release-${{ steps.release.outputs.tag }}
           path: dist/
           retention-days: 7
 
