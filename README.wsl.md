@@ -66,11 +66,13 @@ On first launch the OOBE creates your account, named after your Windows sign-in,
 omarchy setup wsl viewer
 ```
 
-The desktop is served over VNC and shown in a client. Windows ships no VNC client, so this fetches TigerVNC's standalone viewer — pinned version, pinned SHA256 — into `%LOCALAPPDATA%\Omarchy`, and creates an **Omarchy Desktop** shortcut on your Windows desktop.
+The desktop is served over VNC and shown in a client. Windows ships no VNC client, so this fetches two — TurboVNC and TigerVNC, both pinned by version and SHA256 — into `%LOCALAPPDATA%\Omarchy`, and creates an **Omarchy Desktop** shortcut on your Windows desktop.
+
+TurboVNC is the one the desktop uses, because it is the only one that grabs the keyboard in a window. Without a grab Windows keeps `SUPER` and none of the keybindings reach the session. Its installer is unpacked rather than run, so no VNC *server* is installed on Windows and nothing asks for elevation.
 
 This is the one step the image cannot do for you: it runs in a build container with no Windows to write to.
 
-Without it the desktop still opens, in the viewer inside WSL. That one cannot reach the Windows clipboard.
+Without it the desktop still opens, in the viewer inside WSL. That one cannot reach the Windows clipboard and never receives `SUPER`.
 
 ## 4. Start the desktop
 
@@ -82,9 +84,10 @@ startx
 
 Closing the window ends the session.
 
+- **Keybindings** work — `SUPER + RETURN` opens a terminal. The viewer grabs the keyboard so `SUPER` reaches the session; **CTRL-ALT-SHIFT-G** toggles that off when you want Windows shortcuts back.
 - **Clipboard** works both ways, including UTF-8.
-- **Resizing** the window resizes the desktop. The viewer logs `SetDesktopSize failed: 4` when it does; that is misleading — result 4 means *request forwarded*, and the resize is applied.
-- **The pointer** is drawn by the viewer, so it does not lag.
+- **Resizing** the window resizes the desktop.
+- **The pointer** is drawn by the compositor into the image, so there is exactly one.
 
 ## When something is wrong
 
