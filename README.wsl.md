@@ -8,83 +8,86 @@ For how any of this works — the DRM device, the session model, the VNC path �
 
 ## Quickstart
 
-There are two ways in. Pick one.
+The image is built from this checkout — it gzips to around 5 GB, past what a GitHub release asset may be, so there is nothing to download. The kernel is published, because it takes hours to build and is small.
 
-**Install a prebuilt release.** Everything is built for you; you need only WSL. From PowerShell on Windows:
-
-```powershell
-irm https://github.com/CrunchyMonkies/omarchy/releases/latest/download/Install-Omarchy.ps1 | iex
+```bash
+omarchy dev wsl build --output ~/omarchy.wsl
 ```
 
-Then, inside the distribution, `omarchy setup wsl viewer` and `startx`. The long form is under [Install a prebuilt release](#install-a-prebuilt-release).
+Then from PowerShell on Windows, pointing at what you just built:
 
-**Build it yourself.** For developing on this repository, or when you want the image built from your own checkout. Needs Docker and about 50 GB, and the kernel build takes hours. Start at [Build it yourself](#build-it-yourself).
+```powershell
+.\Install-Omarchy.ps1 -ImagePath C:\path\to\omarchy.wsl
+```
 
-Both paths end at the same place, and the Windows-side steps are identical — the installer can install locally built artifacts too.
+That fetches the kernel from the latest release, sets up `.wslconfig`, imports the image and unpacks the modules. Then `omarchy setup wsl viewer` and `startx` inside the distribution.
+
+The rest of this file is that in full, plus what to do when a piece of it does not work.
 
 ## What you need
 
-To **install a release**:
+- WSL 2 with WSLg (`wsl --version` reports both; if that command is not recognised, run `wsl --install` and `wsl --update`)
+- Docker on the machine you build from
+- About 50 GB free while building, and about 25 GB where the distribution will live
 
-- Windows with WSL 2 and WSLg (`wsl --version` reports both; if that command is not recognised, run `wsl --install` and `wsl --update`)
-- About 25 GB free where the distribution will live
+Nothing on the Windows side needs administrator rights.
 
-To **build it yourself**, additionally:
+## 1. Get the kernel
 
-- Docker on the machine you build from, for both the kernel and the image
-- About 50 GB free while building
+Stock WSL2 kernels expose Microsoft's `/dev/dxg` and no DRM device at all, so Hyprland has nothing to render on. Everything except the desktop works on a stock kernel; `startx` does not.
 
-Nothing on either path needs administrator rights on Windows.
+**From a release** — `bzImage` and `bzImage-modules.tar.gz` are attached to every [release](https://github.com/CrunchyMonkies/omarchy/releases), and `Install-Omarchy.ps1` fetches them for you. Nothing to do here.
 
-## Install a prebuilt release
+**Or build it**, if you want a different branch or do not trust a binary you did not produce:
 
-Releases are published on the [releases page](https://github.com/CrunchyMonkies/omarchy/releases) and carry the image, the kernel, a source tarball and a `SHA256SUMS` covering all of them.
+```bash
+omarchy dev wsl kernel --output ~/bzImage
+```
 
-Release tags are calendar versions — `YYYYMM.DD.N`, for example `202608.31.0`, where the trailing counter distinguishes a second build on the same day. They are independent of the repository's `version` file, which tracks the upstream Omarchy package version.
+Builds `microsoft/WSL2-Linux-Kernel` with VKMS turned on, in a Debian container, and writes `~/bzImage` and `~/bzImage-modules.tar.gz`. This takes **hours**. The container is capped at half the machine so the host stays usable; `--jobs` and `--branch` override the defaults.
+
+Pass it later with `-KernelPath`.
+
+## 2. Build the image
+
+```bash
+omarchy dev wsl build --output ~/omarchy.wsl
+```
+
+Builds on top of the official Arch Linux WSL rootfs, overlaying this checkout at `/usr/local/share/omarchy` so the image runs the code you have. Pass `--no-dev-link` to ship the released `/usr/share/omarchy` instead.
+
+Takes tens of minutes, mostly installing packages, and needs no root on the host — everything happens inside Docker.
+
+## 3. Install on Windows
 
 ### With the installer
 
-```powershell
-irm https://github.com/CrunchyMonkies/omarchy/releases/latest/download/Install-Omarchy.ps1 | iex
-```
-
-Or download it first, to pass options:
+Copy `~/omarchy.wsl` somewhere Windows can read, then from PowerShell:
 
 ```powershell
 irm https://github.com/CrunchyMonkies/omarchy/releases/latest/download/Install-Omarchy.ps1 -OutFile Install-Omarchy.ps1
-.\Install-Omarchy.ps1 -Name Omarchy -Location C:\WSL\Omarchy
+.\Install-Omarchy.ps1 -ImagePath C:\Users\<you>\omarchy.wsl
 ```
 
 | Option | What it does |
 | --- | --- |
-| `-Tag 202608.31.0` | install a specific release instead of the latest |
+| `-ImagePath` | the `.wsl` you built — **required**, there is no published image |
+| `-KernelPath` | install a locally built `bzImage` instead of the release's |
+| `-Tag 202608.31.0` | take the kernel from a specific release instead of the latest |
 | `-Name` | the name to register the distribution under (default `Omarchy`) |
 | `-Location` | where the distribution is stored (default `%USERPROFILE%\WSL\Omarchy`) |
-| `-ImagePath` / `-KernelPath` | install locally built artifacts rather than downloading |
 | `-SkipKernel` | import the image only — the CLI works, `startx` does not |
 | `-Force` | replace an existing distribution, or an existing `kernel=` line |
 
-It downloads and verifies the assets, copies the kernel to `%USERPROFILE%\bzImage`, sets `kernel=` in `.wslconfig`, restarts WSL, imports the image and unpacks the kernel modules. It stops before installing anything if a checksum does not match.
+It verifies the kernel against the release's `SHA256SUMS` and stops before installing anything if that fails. The image is taken on trust, because you built it.
 
-The script lives at [`install/wsl/windows/Install-Omarchy.ps1`](install/wsl/windows/Install-Omarchy.ps1) and is published as a release asset so the URL above always matches the release it installs.
+The script lives at [`install/wsl/windows/Install-Omarchy.ps1`](install/wsl/windows/Install-Omarchy.ps1) and is published as a release asset so the URL above always matches the release it takes the kernel from.
 
 ### By hand
 
-The same thing, step by step, if you would rather not run a script.
+The same thing, step by step.
 
-**1. Download.** From the release, take `omarchy-<tag>.wsl`, `bzImage`, `bzImage-modules.tar.gz` and `SHA256SUMS`.
-
-**2. Verify.** In WSL, or anywhere with `sha256sum`:
-
-```bash
-sha256sum -c SHA256SUMS
-```
-
-Every line must say `OK`. If one does not, download it again; do not import it.
-
-**3. Install the kernel.** Stock WSL2 kernels expose Microsoft's `/dev/dxg` and no DRM device at all, so Hyprland has nothing to render on. Everything except the desktop works on a stock kernel; `startx` does not.
-
-Copy `bzImage` where Windows can read it, and point `.wslconfig` at it. **The backslashes are escaped** — a single-backslash path does not resolve and WSL quietly boots its own kernel instead, which looks exactly like a kernel that built wrong:
+**1. Install the kernel.** Copy `bzImage` where Windows can read it, and point `.wslconfig` at it. **The backslashes are escaped** — a single-backslash path does not resolve and WSL quietly boots its own kernel instead, which looks exactly like a kernel that built wrong:
 
 ```ini
 [wsl2]
@@ -97,15 +100,15 @@ Then, from Windows rather than from inside WSL:
 wsl --shutdown
 ```
 
-**4. Import the image.**
+**2. Import the image.**
 
 ```powershell
-wsl --install --from-file C:\Users\<you>\omarchy-<tag>.wsl --location C:\Users\<you>\WSL\Omarchy --name Omarchy
+wsl --install --from-file C:\Users\<you>\omarchy.wsl --location C:\Users\<you>\WSL\Omarchy --name Omarchy
 ```
 
 On first launch the OOBE creates your account, named after your Windows sign-in, and finishes provisioning. There is nothing to answer unless your Windows name contains characters a UNIX name cannot.
 
-**5. Unpack the kernel modules.** The `kernel=` setting is **global**: every distribution on the machine now boots this kernel, and a `bzImage` alone is not a drop-in replacement — the stock WSL kernel keeps most of itself as modules. Unpack them into **every** distribution:
+**3. Unpack the kernel modules.** The `kernel=` setting is **global**: every distribution on the machine now boots this kernel, and a `bzImage` alone is not a drop-in replacement — the stock WSL kernel keeps most of itself as modules. Unpack them into **every** distribution:
 
 ```bash
 sudo tar -C / -xzf /mnt/c/Users/<you>/bzImage-modules.tar.gz
@@ -114,79 +117,11 @@ printf '%s\n' bridge nft_compat xt_addrtype xt_MASQUERADE xt_conntrack | sudo te
 
 Nothing autoloads modules under WSL, which is why they have to be named up front. Without them Docker will not start.
 
+Every kernel build reports the same release string, so a rebuild overwrites the previous build's modules rather than landing beside them. Unpack the tarball on every rebuild: the version magic still matches, so `modprobe` will load a module compiled against a different config without complaint.
+
 **Checkpoint.** After another `wsl --shutdown`, `/dev/dri` must contain `card0` **and nothing else**. A `renderD*` node means a kernel carrying the community dxgkrnl DRM patches, and buffer imports fail against it. `docker info` should also succeed, which proves the modules loaded.
 
-**6. Set up the Windows side.** See [Set up the Windows side](#5-set-up-the-windows-side) below — it is the same step on both paths.
-
-**7. Start the desktop.** See [Start the desktop](#6-start-the-desktop).
-
-## Build it yourself
-
-Everything happens inside Docker containers built from official base images, so none of this needs root on the host and none of it can touch the host system.
-
-### 1. Build the kernel
-
-```bash
-omarchy dev wsl kernel --output ~/bzImage
-```
-
-Builds `microsoft/WSL2-Linux-Kernel` with VKMS turned on, in a Debian container. Produces `~/bzImage` and `~/bzImage-modules.tar.gz`.
-
-This takes **hours**. The container is capped at half the machine so the host stays usable; `--jobs` and `--branch` override the defaults. It prints what to do next when it finishes.
-
-### 2. Install the kernel
-
-Identical to the release path. Copy the kernel where Windows can read it and point `.wslconfig` at it, remembering the escaped backslashes:
-
-```ini
-[wsl2]
-kernel=C:\\Users\\<you>\\bzImage
-```
-
-Unpack the modules into **every** distribution on the machine, because `kernel=` is global:
-
-```bash
-sudo tar -C / -xzf ~/bzImage-modules.tar.gz
-printf '%s\n' bridge nft_compat xt_addrtype xt_MASQUERADE xt_conntrack | sudo tee /etc/modules-load.d/wsl-kernel.conf
-```
-
-Every build reports the same release string, so a rebuild overwrites the previous build's modules rather than landing beside them. Unpack the tarball on every rebuild: the version magic still matches, so `modprobe` will load a module compiled against a different config without complaint.
-
-Then, from Windows rather than from inside WSL:
-
-```powershell
-wsl --shutdown
-```
-
-**Checkpoint.** `/dev/dri` must contain `card0` and nothing else, and `docker info` must succeed.
-
-### 3. Build the image
-
-```bash
-omarchy dev wsl build --output ~/omarchy.wsl
-```
-
-Builds on top of the official Arch Linux WSL rootfs, overlaying this checkout at `/usr/local/share/omarchy` so the image runs the code you have. Pass `--no-dev-link` to ship the released `/usr/share/omarchy` instead.
-
-Takes tens of minutes, mostly installing packages. Produces a gzipped `.wsl` of a couple of gigabytes.
-
-### 4. Import the image
-
-Copy the `.wsl` somewhere Windows can read, then from Windows:
-
-```powershell
-wsl --install --from-file C:\Users\<you>\omarchy.wsl --location C:\Users\<you>\WSL\Omarchy --name Omarchy
-```
-
-Or let the installer do steps 2 and 4 for you, with the artifacts you just built:
-
-```powershell
-.\Install-Omarchy.ps1 -ImagePath C:\Users\<you>\omarchy.wsl -KernelPath C:\Users\<you>\bzImage
-```
-
-It expects the modules tarball beside the kernel, under the name the build gives it.
-
-### 5. Set up the Windows side
+## 4. Set up the Windows side
 
 ```bash
 omarchy setup wsl viewer
@@ -200,7 +135,7 @@ This is the one step the image cannot do for you: it runs in a build container w
 
 Without it the desktop still opens, in the viewer inside WSL. That one cannot reach the Windows clipboard and never receives `SUPER`.
 
-### 6. Start the desktop
+## 5. Start the desktop
 
 Double-click **Omarchy Desktop**, or run:
 
@@ -388,6 +323,8 @@ git tag "$(date -u +%Y%m.%d.0)"
 git push origin "$(date -u +%Y%m.%d.0)"
 ```
 
-Pushing one runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs the test suites, builds the image, and publishes it with a source tarball, the installer and a `SHA256SUMS`. Run it with `workflow_dispatch` and `dry_run` to build everything into a workflow artifact without publishing anything.
+Pushing one runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs the test suites and publishes the installer, a source tarball and a `SHA256SUMS`. Run it with `workflow_dispatch` and `dry_run` to build everything into a workflow artifact without publishing anything.
 
-The kernel is built separately, by [`.github/workflows/wsl-kernel.yml`](.github/workflows/wsl-kernel.yml), because it takes hours and only changes when the WSL2 kernel branch moves. Run it by hand with the tag of a release that already exists; it attaches `bzImage` and `bzImage-modules.tar.gz` and merges them into that release's `SHA256SUMS`.
+The `.wsl` image is deliberately not published: it gzips to around 5 GB, and a GitHub release asset may be at most 2 GiB. It is built from a checkout instead, which is what step 2 above does.
+
+The kernel is published, since it is small and takes hours to build. [`.github/workflows/wsl-kernel.yml`](.github/workflows/wsl-kernel.yml) builds it and attaches `bzImage` and `bzImage-modules.tar.gz` to a release that already exists, merging them into that release's `SHA256SUMS`. Run it by hand; it only needs rerunning when the WSL2 kernel branch moves.
