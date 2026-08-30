@@ -260,13 +260,22 @@ wait_until() {
 session_pid=""
 wayvnc_pid=""
 
+session_gone() {
+  ! kill -0 "$session_pid" 2>/dev/null
+}
+
 cleanup() {
   if [[ -n $wayvnc_pid ]]; then
     kill "$wayvnc_pid" 2>/dev/null
   fi
 
   if [[ -n $session_pid ]] && kill -0 "$session_pid" 2>/dev/null; then
-    hyprctl dispatch exit >/dev/null 2>&1
+    # The Lua config's dispatcher form. Plain "hyprctl dispatch exit" is a
+    # syntax error under it, returns 7, and leaves the session running.
+    hyprctl dispatch 'hl.dsp.exit()' >/dev/null 2>&1
+
+    # Don't let a session that ignores that strand startx in wait forever.
+    wait_until 10 session_gone || kill "$session_pid" 2>/dev/null
     wait "$session_pid" 2>/dev/null
   fi
 }

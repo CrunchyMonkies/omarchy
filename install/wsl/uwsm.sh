@@ -49,8 +49,9 @@ install -Dm755 /dev/stdin /usr/local/bin/uwsm <<'UWSM'
 # else falls through to the real uwsm, which is still installed.
 case "${1:-}" in
   stop)
-    # omarchy-system-logout ends the session with this.
-    exec hyprctl dispatch exit
+    # omarchy-system-logout ends the session with this. The Lua config wants the
+    # dispatcher form; plain "hyprctl dispatch exit" is a syntax error under it.
+    exec hyprctl dispatch 'hl.dsp.exit()'
     ;;
   app)
     # The generated desktop entry in omarchy-windows-vm uses "uwsm app --".
