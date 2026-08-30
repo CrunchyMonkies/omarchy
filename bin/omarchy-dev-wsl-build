@@ -179,6 +179,20 @@ step "Pointing pacman at the Omarchy repositories"
 cp -f "$SRC/default/pacman/pacman-stable.conf" /etc/pacman.conf
 cp -f "$SRC/default/pacman/mirrorlist-stable" /etc/pacman.d/mirrorlist
 
+# pacman drops to DownloadUser and confines the download with Landlock, and
+# Docker's seccomp profile refuses those syscalls, so every transaction dies at
+# "the Landlock ruleset could not be applied". Arch's own container image ships
+# DisableSandboxFilesystem for this reason; the WSL rootfs leaves it commented
+# because on a real WSL install the sandbox works.
+#
+# This is a property of building in a container, not of the image, so the
+# pristine config is restored before packing. It only bites on a Landlock-
+# capable host kernel: without one, pacman finds no sandbox to apply and says
+# nothing.
+# Into [options], not appended: a directive after the last repository header
+# belongs to that repository and is silently ignored here.
+sed -i '/^\[options\]/a DisableSandboxFilesystem' /etc/pacman.conf
+
 step "Trusting the Omarchy signing key"
 # Same key and keyserver as omarchy-update-keyring, which cannot run yet
 # because the omarchy package is not installed.
@@ -223,6 +237,10 @@ export PATH="$OMARCHY_PATH/bin:$PATH"
 omarchy-apply-wsl --first-install
 
 step "Cleaning up for distribution"
+# Undo the container-only sandbox opt-out by restoring the file the repo ships,
+# so the image's pacman.conf is the one users are meant to have.
+cp -f "$SRC/default/pacman/pacman-stable.conf" /etc/pacman.conf
+
 # Microsoft's rules for a distributable image: no resolv.conf, no kernel or
 # initramfs, and no password hashes in /etc/shadow.
 pacman -Scc --noconfirm >/dev/null
@@ -237,6 +255,11 @@ rm -f /root/.bash_history
 
 if awk -F: '$2 ~ /^\$/ { found = 1 } END { exit !found }' /etc/shadow; then
   echo "Error: /etc/shadow carries password hashes; WSL images must not." >&2
+  exit 1
+fi
+
+if grep -q '^DisableSandboxFilesystem' /etc/pacman.conf; then
+  echo "Error: the container-only pacman sandbox opt-out reached the image." >&2
   exit 1
 fi
 

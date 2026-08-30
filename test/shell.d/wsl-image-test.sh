@@ -59,6 +59,18 @@ grep -q 'hl.monitor({ output = "Virtual-1", disabled = true })' "$ROOT/install/w
   fail "install/wsl/hypr.sh disables the VKMS output from config"
 pass "install/wsl/hypr.sh disables the VKMS output from config"
 
+# pacman confines downloads with Landlock, which Docker refuses. Without the
+# opt-out the build dies at the first sync on any Landlock-capable host kernel;
+# with it left in place, the image ships a config users should not have.
+grep -qF "sed -i '/^\[options\]/a DisableSandboxFilesystem' /etc/pacman.conf" \
+  "$ROOT/bin/omarchy-dev-wsl-build" ||
+  fail "the build disables pacman's filesystem sandbox in the [options] section"
+
+grep -q "the container-only pacman sandbox opt-out reached the image" \
+  "$ROOT/bin/omarchy-dev-wsl-build" ||
+  fail "the build fails if that opt-out reaches the image"
+pass "the pacman sandbox opt-out is container-only"
+
 # run_logged sources each path verbatim, so a typo here fails the whole install
 # halfway through a build rather than at review time.
 missing=""
