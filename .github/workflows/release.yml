@@ -45,7 +45,7 @@ jobs:
         run: |
           pacman -Sy --noconfirm --needed \
             git jq lua ripgrep fd imagemagick libxkbcommon nodejs python \
-            desktop-file-utils
+            desktop-file-utils diffutils sudo
 
       - uses: actions/checkout@v4
 
@@ -55,9 +55,9 @@ jobs:
         # commit. Everything else still runs, and any other failure still fails
         # the gate.
         #
-        #   unowned-system-paths, snapper - read PKGBUILDs from the sibling
-        #     omarchy-pkgs repository, which is not published anywhere this
-        #     runner can reach.
+        #   unowned-system-paths, snapper, config - read PKGBUILDs from the
+        #     sibling omarchy-pkgs repository, which is not published anywhere
+        #     this runner can reach.
         #   hw-hybrid-gpu - runs bin/omarchy-hw-hybrid-gpu, which calls
         #     omarchy-cmd-present as a bare command. That resolves only where
         #     Omarchy is already installed. Putting the checkout's own bin/ on
@@ -67,14 +67,23 @@ jobs:
           mkdir -p "$RUNNER_TEMP/needs-a-maintainer-machine"
           mv test/shell.d/unowned-system-paths-test.sh \
              test/shell.d/snapper-test.sh \
+             test/shell.d/config-test.sh \
              test/shell.d/hw-hybrid-gpu-test.sh \
              "$RUNNER_TEMP/needs-a-maintainer-machine/"
 
       - name: Run the CLI and shell suites
+        # As an unprivileged user, because a container job is root by default
+        # and root ignores the permission bits several tests are asserting on:
+        # a directory chmod'ed shut still opens, so the failure they expect
+        # never happens.
+        #
         # Tests that need a compositor skip themselves through
         # require_compositor, so nothing here needs a display. The graphical
         # acceptance suite is deliberately not part of ./test/all.
-        run: ./test/all
+        run: |
+          useradd --create-home tester
+          chown -R tester:tester "$GITHUB_WORKSPACE"
+          runuser -u tester -- env HOME=/home/tester ./test/all
 
   image:
     name: Image
