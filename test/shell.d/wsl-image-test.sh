@@ -225,6 +225,71 @@ grep -q 'hide_compositor_cursor' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "install/wsl/hypr.sh leaves the compositor cursor on for TurboVNC"
 pass "the cursor is drawn once, whichever viewer runs"
 
+# The viewer titles its window from the desktop name the server advertises.
+# Unnamed, the one window standing in for the whole desktop is called WayVNC,
+# after the transport. Nothing breaks if this regresses, which is why it is
+# asserted rather than left to be noticed.
+grep -q 'wayvnc --name="$VNC_DESKTOP_NAME"' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session names the VNC desktop"
+grep -qE '^VNC_DESKTOP_NAME=.+' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session defines the desktop name"
+pass "omarchy-launch-wsl-session names the VNC desktop"
+
+# The title then follows focus, and the watcher has to be stopped with the
+# session -- it outlives the compositor otherwise, holding a socat on a socket
+# that has gone.
+grep -q 'omarchy-hyprland-vnc-title-watch "$VNC_DESKTOP_NAME" &' \
+  "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session starts the title watcher"
+grep -q 'kill "$title_pid"' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session stops the title watcher on the way out"
+pass "the title watcher is started with the session and stopped with it"
+
+# It sets the name through wayvnc's control socket rather than restarting the
+# server, which would drop the client mid-session.
+grep -q 'wayvncctl set-desktop-name' "$ROOT/bin/omarchy-hyprland-vnc-title-watch" ||
+  fail "the title watcher sets the name over the control socket"
+# A window title is remote input: any web page chooses its own.
+grep -q 'title=${title//\[\[:cntrl:\]\]/}' "$ROOT/bin/omarchy-hyprland-vnc-title-watch" ||
+  fail "the title watcher strips control characters from the window title"
+pass "the title watcher sets a sanitised name over the control socket"
+
+# The name composition itself, run rather than read. Everything above the event
+# loop is pure, so it can be lifted out and driven with a stubbed compositor.
+title_source=$(sed -n '1,/^last_name=/p' "$ROOT/bin/omarchy-hyprland-vnc-title-watch" | sed '$d')
+
+compose_title() {
+  bash -c "
+    hyprctl() { printf '%s' \"\$STUB\"; }
+    $title_source
+    desktop_name
+  " watcher Omarchy
+}
+
+got=$(STUB='{"title":"New Tab - Chromium"}' compose_title)
+[[ $got == "New Tab - Chromium — Omarchy" ]] ||
+  fail "the title watcher names the focused window" "got: $got"
+
+# No focused window: hyprctl returns null, and the desktop keeps its own name
+# rather than being titled after nothing.
+got=$(STUB='{}' compose_title)
+[[ $got == "Omarchy" ]] ||
+  fail "the title watcher falls back to the desktop name" "got: $got"
+
+# A page that puts a newline in its title would otherwise put one on the wire.
+got=$(STUB='{"title":"one\ttwo"}' compose_title)
+[[ $got == "onetwo — Omarchy" ]] ||
+  fail "the title watcher strips control characters" "got: $got"
+
+# Long titles are cut rather than sent whole.
+long=$(printf 'x%.0s' {1..200})
+got=$(STUB="{\"title\":\"$long\"}" compose_title)
+(( ${#got} < 120 )) ||
+  fail "the title watcher caps the title length" "got ${#got} characters"
+[[ $got == *"… — Omarchy" ]] ||
+  fail "a cut title is marked as cut" "got: $got"
+pass "the title watcher composes, sanitises and caps the desktop name"
+
 # The image has no password hash, so a lock screen can never be answered. The
 # idle cycle has to be off before it ever locks.
 grep -q 'install -Dm644 /dev/null /etc/skel/.local/state/omarchy/indicators/stay-awake' \
