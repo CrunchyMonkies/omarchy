@@ -1,4 +1,5 @@
 run_logged "$OMARCHY_INSTALL/wsl/packages.sh"
+run_logged "$OMARCHY_INSTALL/wsl/neatvnc.sh"
 run_logged "$OMARCHY_INSTALL/config/theme-system.sh"
 run_logged "$OMARCHY_INSTALL/config/browser-policy.sh"
 run_logged "$OMARCHY_INSTALL/config/lockscreen-pam.sh"
