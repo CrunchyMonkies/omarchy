@@ -322,7 +322,20 @@ sockets_before=$(compgen -G "$XDG_RUNTIME_DIR/wayland-[0-9]*" | sort)
 # launcher -- running the binary bare warns against it, and the watchdog wants
 # nothing from systemd or uwsm. Backgrounded rather than exec'd because the
 # output and the viewer still have to be set up once it is listening.
-dbus-run-session -- start-hyprland &
+# DISPLAY is unset for the compositor, and only for it. /etc/profile.d/omarchy-wslg.sh
+# points it at WSLg's own X server so GUI apps run from a plain shell have one --
+# but inside the session that server is a foreign display, and no Xwayland runs
+# here to correct it. An X11 client launched from the desktop connects there
+# instead and its window never appears in the session: VS Code starts, six
+# processes and all, and shows nothing. Unset, toolkits pick Wayland, and
+# Hyprland provides its own Xwayland for what still needs X.
+#
+# The launcher keeps its own DISPLAY: the in-WSL viewer below is an X11 client
+# of WSLg and needs exactly the one being withheld here.
+#
+# XDG_SESSION_TYPE comes through as "unspecified" without a display manager to
+# set it, which is how Electron decides to try X11 first.
+env -u DISPLAY XDG_SESSION_TYPE=wayland dbus-run-session -- start-hyprland &
 session_pid=$!
 
 if ! wait_until 60 session_ready; then

@@ -141,6 +141,14 @@ grep -q -- '--install-extension "$extension" </dev/null' "$ROOT/bin/omarchy-them
   fail "omarchy-theme-set-vscode cannot block installing an extension"
 pass "omarchy-theme-set-vscode never waits on stdin"
 
+# WSLg's DISPLAY belongs to a server outside the session. Left set, X11 clients
+# launched from the desktop connect there and their windows never appear --
+# VS Code runs with no window and nothing logged.
+grep -q 'env -u DISPLAY XDG_SESSION_TYPE=wayland dbus-run-session -- start-hyprland' \
+  "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "the compositor starts without WSLg's DISPLAY"
+pass "the compositor does not inherit WSLg's DISPLAY"
+
 # Both leaves have to actually run during the build.
 for leaf in vscode systemd-run; do
   grep -q "wsl/$leaf.sh" "$ROOT/install/wsl/all.sh" ||
