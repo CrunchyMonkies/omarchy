@@ -53,6 +53,12 @@ for group in seat video render; do
 done
 pass "install/wsl/groups.sh records the session's device groups"
 
+# wayvnc only resizes a HEADLESS-* output, so the VKMS one has to be off -- and
+# off from config, since hyprctl reload re-enables a runtime-disabled monitor.
+grep -q 'hl.monitor({ output = "Virtual-1", disabled = true })' "$ROOT/install/wsl/hypr.sh" ||
+  fail "install/wsl/hypr.sh disables the VKMS output from config"
+pass "install/wsl/hypr.sh disables the VKMS output from config"
+
 # run_logged sources each path verbatim, so a typo here fails the whole install
 # halfway through a build rather than at review time.
 missing=""
