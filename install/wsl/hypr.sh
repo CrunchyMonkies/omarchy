@@ -26,24 +26,29 @@ hl.monitor({ output = "Virtual-1", disabled = true })
 MONITOR
 fi
 
-# A headless output has no hardware cursor plane, so Hyprland composites the
-# cursor straight into the framebuffer that wayvnc captures -- and wayvnc
-# forwards the cursor to the client as well, so the viewer draws two. Turning
-# the compositor's cursor off leaves the client to draw the only one, which it
-# does locally and therefore without a round trip. omarchy-launch-wsl-session
-# passes the viewer -AlwaysCursor=1 to make it do so.
-skel_looknfeel=/etc/skel/.config/hypr/looknfeel.lua
 
-if [[ ! -f $skel_looknfeel ]]; then
-  echo "Error: $skel_looknfeel is missing; omarchy-settings should have shipped it." >&2
+# Hyprland matches keybindings by keycode. That works when the keyboard is a
+# real device sharing the compositor's keymap, but the only keyboard in a WSL
+# session is the virtual one wayvnc creates for the VNC client, and it carries
+# its own keymap -- so the keycodes never line up and not one binding fires.
+# Typed text still reaches applications, which makes it look like the bindings
+# are broken rather than the matching.
+#
+# Resolving by symbol instead matches what the client actually sent. Without
+# this the desktop has no working keybindings at all, whichever VNC client is
+# used: it is the compositor's matching, not the client's key handling.
+skel_input=/etc/skel/.config/hypr/input.lua
+
+if [[ ! -f $skel_input ]]; then
+  echo "Error: $skel_input is missing; omarchy-settings should have shipped it." >&2
   exit 1
 fi
 
-if ! grep -q 'invisible = true' "$skel_looknfeel"; then
-  cat >>"$skel_looknfeel" <<'CURSOR'
+if ! grep -q 'resolve_binds_by_sym' "$skel_input"; then
+  cat >>"$skel_input" <<'INPUT'
 
--- WSL: the desktop is served over VNC and the client draws the pointer, so the
--- compositor must not draw one as well. See omarchy-launch-wsl-session.
-hl.config({ cursor = { invisible = true } })
-CURSOR
+-- WSL: every key arrives through wayvnc's virtual keyboard, which has its own
+-- keymap, so keycode-matched bindings never fire. See install/wsl/hypr.sh.
+hl.config({ input = { resolve_binds_by_sym = true } })
+INPUT
 fi
