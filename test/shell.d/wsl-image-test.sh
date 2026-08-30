@@ -249,6 +249,35 @@ grep -q 'wsl/audio.sh' "$ROOT/install/wsl/all.sh" ||
   fail "install/wsl/all.sh runs audio.sh"
 pass "ALSA applications are routed to WSLg's PulseAudio"
 
+# The image generates no locales at all, and WSL's /init hands the Windows
+# locale straight to the session -- so setlocale() fails in everything the
+# desktop launches, which is how gtk-launch and foot both ended up complaining.
+grep -q 'locale-gen' "$ROOT/install/wsl/locale.sh" ||
+  fail "install/wsl/locale.sh generates the locales"
+grep -q '/etc/locale.gen' "$ROOT/install/wsl/locale.sh" ||
+  fail "install/wsl/locale.sh uncomments a locale in /etc/locale.gen"
+grep -q 'en_US' "$ROOT/install/wsl/locale.sh" ||
+  fail "install/wsl/locale.sh names the locale it generates"
+grep -q 'wsl/locale.sh' "$ROOT/install/wsl/all.sh" ||
+  fail "install/wsl/all.sh runs locale.sh"
+pass "the WSL image generates a locale"
+
+# Generating one cannot cover every Windows locale, so the session must not
+# pass on a LANG that resolves to nothing.
+grep -q 'export LANG=C.UTF-8' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "the session falls back to a locale that exists"
+pass "the session refuses to pass on an ungenerated LANG"
+
+# "locale -a" writes en_US.UTF-8 as en_US.utf8, so a literal comparison against
+# LANG never matches and the fallback would fire for a locale that is present.
+locale_source=$(sed -n '/^normalized_locale()/,/^}/p' "$ROOT/bin/omarchy-launch-wsl-session")
+norm() { bash -c "$locale_source"$'\n'"normalized_locale \"$1\""; }
+[[ $(norm en_US.UTF-8) == "en_US.utf8" ]] ||
+  fail "normalized_locale matches the spelling locale -a uses" "got: $(norm en_US.UTF-8)"
+[[ $(norm C.UTF-8) == "C.utf8" ]] ||
+  fail "normalized_locale handles C.UTF-8" "got: $(norm C.UTF-8)"
+pass "normalized_locale matches the spelling locale -a uses"
+
 # The desktop itself does not need WSLg running: the viewer is a Windows
 # program and wayvnc serves it over the loopback. Only the mount is required,
 # so this check must stay a directory test -- tightening it to demand a live
