@@ -114,6 +114,12 @@ grep -qE '^command = /etc/oobe.sh$' "$distribution_conf" ||
   fail "wsl-distribution.conf runs /etc/oobe.sh on first run"
 pass "wsl-distribution.conf runs /etc/oobe.sh on first run"
 
+# WSL binds the distribution to the Windows account that launched it, so the
+# name here follows from there rather than being asked for.
+grep -q 'cmd.exe /c "echo %USERNAME%"' "$ROOT/default/wsl/oobe.sh" ||
+  fail "oobe.sh names the account after the Windows sign-in"
+pass "oobe.sh names the account after the Windows sign-in"
+
 [[ -x $ROOT/default/wsl/oobe.sh ]] ||
   fail "default/wsl/oobe.sh is executable"
 pass "default/wsl/oobe.sh is executable"

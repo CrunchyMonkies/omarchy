@@ -46,23 +46,57 @@ if [[ -f $OMARCHY_PATH/logo.txt ]]; then
   echo
 fi
 
-echo "Creating your Omarchy user account."
-echo
+# WSL ties the distribution to whoever is signed in to Windows, so the account
+# here is named after that one rather than asked for. Interop is enabled in
+# /etc/wsl.conf and this runs before any shell, so cmd.exe is what can answer;
+# it prints a warning about the UNC working directory first, hence the tail.
+#
+# Windows allows names useradd will not: spaces, capitals, apostrophes,
+# accents. Only the obvious mappings are made here -- case folded, spaces and
+# dots to hyphens. Anything else falls through to the prompt, because silently
+# stripping letters would name the account something the user never chose
+# ("Ünïcode" is not "ncode").
+windows_username() {
+  local raw name
 
-# useradd's own rules: start with a letter or underscore, then letters, digits,
-# underscores or hyphens. Reject anything it would reject, with a message.
-username=""
-while [[ -z $username ]]; do
-  read -rp "Enter a UNIX username: " username
+  raw=$(/mnt/c/Windows/System32/cmd.exe /c "echo %USERNAME%" 2>/dev/null | tail -1 | tr -d '\r\n')
+  [[ $raw =~ ^[A-Za-z0-9\ ._-]+$ ]] || return 1
 
-  if [[ ! $username =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-    echo "Invalid username. Use lowercase letters, digits, - and _, starting with a letter." >&2
-    username=""
-  elif getent passwd "$username" >/dev/null; then
-    echo "That user already exists." >&2
-    username=""
-  fi
-done
+  name=${raw,,}
+  name=${name//[ .]/-}
+
+  [[ $name =~ ^[a-z_][a-z0-9_-]*$ ]] || return 1
+
+  echo "$name"
+}
+
+username=$(windows_username) || username=""
+
+if [[ -n $username ]] && getent passwd "$username" >/dev/null; then
+  username=""
+fi
+
+if [[ -n $username ]]; then
+  echo "Creating your Omarchy user account as $username, to match your Windows sign-in."
+  echo
+else
+  echo "Creating your Omarchy user account."
+  echo
+
+  # useradd's own rules: start with a letter or underscore, then letters, digits,
+  # underscores or hyphens. Reject anything it would reject, with a message.
+  while [[ -z $username ]]; do
+    read -rp "Enter a UNIX username: " username
+
+    if [[ ! $username =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+      echo "Invalid username. Use lowercase letters, digits, - and _, starting with a letter." >&2
+      username=""
+    elif getent passwd "$username" >/dev/null; then
+      echo "That user already exists." >&2
+      username=""
+    fi
+  done
+fi
 
 # No password is set. The image ships with no hashes in /etc/shadow (Microsoft
 # requires that), Windows owns the login boundary, and
