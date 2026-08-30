@@ -91,7 +91,7 @@ pass "install/wsl/uwsm.sh shims uwsm-app and uwsm"
 # The viewer runs on Windows so the session can reach the Windows clipboard; an
 # X11 viewer inside WSLg bridges to Xwayland instead. The fallback has to stay,
 # because nothing on a fresh Windows install provides a VNC client.
-grep -q 'windows_viewer()' "$ROOT/bin/omarchy-launch-wsl-session" ||
+grep -q 'windows_viewer_dir()' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "omarchy-launch-wsl-session prefers a Windows viewer"
 grep -q 'vncviewer -SecurityTypes None' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "omarchy-launch-wsl-session still falls back to the viewer inside WSL"
@@ -106,6 +106,35 @@ grep -qE '^VIEWER_VERSION=[0-9.]+$' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
   fail "omarchy-setup-wsl-viewer pins a version"
 pass "omarchy-setup-wsl-viewer pins both a version and a checksum"
 
+# Both halves of the TurboVNC fetch are pinned: the installer, and the
+# extractor that unpacks it. Neither publisher signs anything.
+grep -qE '^TURBOVNC_SHA256=[0-9a-f]{64}$' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
+  fail "omarchy-setup-wsl-viewer pins a sha256 for TurboVNC"
+grep -qE '^INNOEXTRACT_SHA256=[0-9a-f]{64}$' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
+  fail "omarchy-setup-wsl-viewer pins a sha256 for the extractor"
+pass "omarchy-setup-wsl-viewer pins TurboVNC and its extractor"
+
+# Running the installer would put a VNC server on the Windows machine and want
+# elevation for its service. Only the viewer is taken out of it.
+grep -q 'innoextract' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
+  fail "omarchy-setup-wsl-viewer unpacks the installer instead of running it"
+pass "omarchy-setup-wsl-viewer unpacks the installer instead of running it"
+
+# The only keyboard in the session is wayvnc's virtual one, which carries its
+# own keymap, so keycode-matched bindings never fire. Without this the desktop
+# has no working keybindings at all, whichever VNC client is used.
+grep -q 'resolve_binds_by_sym' "$ROOT/install/wsl/hypr.sh" ||
+  fail "install/wsl/hypr.sh makes Hyprland resolve keybindings by symbol"
+pass "install/wsl/hypr.sh makes Hyprland resolve keybindings by symbol"
+
+# Stock neatvnc never announces the screen layout at connect, so TurboVNC
+# concludes the server cannot resize and disables it for the session.
+[[ -f $ROOT/install/wsl/patches/neatvnc-announce-desktop-size.patch ]] ||
+  fail "the neatvnc resize patch is present"
+grep -q 'neatvnc-announce-desktop-size.patch' "$ROOT/install/wsl/neatvnc.sh" ||
+  fail "install/wsl/neatvnc.sh applies the neatvnc resize patch"
+pass "install/wsl/neatvnc.sh builds a neatvnc that announces the screen layout"
+
 # The image build runs in a container with no Windows to write to, so the
 # shortcut is the setup command's job or nobody's.
 grep -q 'install_shortcut' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
@@ -113,12 +142,14 @@ grep -q 'install_shortcut' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
 pass "omarchy-setup-wsl-viewer creates the Windows desktop shortcut"
 
 # A headless output has no hardware cursor plane, so the compositor draws the
-# cursor into the frame and the viewer draws another. One of them has to go.
-grep -q 'invisible = true' "$ROOT/install/wsl/hypr.sh" ||
-  fail "install/wsl/hypr.sh turns off the compositor cursor"
-grep -q 'AlwaysCursor=1' "$ROOT/bin/omarchy-launch-wsl-session" ||
-  fail "omarchy-launch-wsl-session has the viewer draw the cursor instead"
-pass "the cursor is drawn once, by the viewer"
+# cursor into the frame. TurboVNC hides its own pointer and expects exactly
+# that; the TigerVNC viewers draw one of their own and would show two, so the
+# compositor's is turned off for those and only those.
+grep -q 'hide_compositor_cursor' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session hides the compositor cursor for the viewers that draw their own"
+! grep -q 'invisible = true' "$ROOT/install/wsl/hypr.sh" ||
+  fail "install/wsl/hypr.sh leaves the compositor cursor on for TurboVNC"
+pass "the cursor is drawn once, whichever viewer runs"
 
 # The image has no password hash, so a lock screen can never be answered. The
 # idle cycle has to be off before it ever locks.

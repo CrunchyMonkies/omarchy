@@ -119,6 +119,14 @@ Omarchy launches every application through `uwsm-app`, which asks `wayland-wm-ap
 
 The same environment is installed at `/etc/profile.d/omarchy-wslg.sh` for ordinary shells, so individual GUI apps opened from a prompt find the WSLg sockets too.
 
+### Keybindings
+
+**Hyprland matches keybindings by keycode, and that does not work here.** The only keyboard in a WSL session is the virtual one wayvnc creates for the VNC client, and it carries its own keymap, so the keycodes never line up and not one binding fires. Typed text still reaches applications, which makes it look like the bindings are broken rather than the matching — a session where `SUPER + RETURN` does nothing but typing works is this, every time.
+
+`install/wsl/hypr.sh` appends `hl.config({ input = { resolve_binds_by_sym = true } })` to `/etc/skel/.config/hypr/input.lua`, which matches on the symbol the client actually sent. Without it the desktop has no working keybindings at all, whichever VNC client is used.
+
+`SUPER` also has to survive the trip from Windows, which is a separate problem: Windows keeps that key for itself unless the viewer grabs the keyboard. TurboVNC does, in a window — see below.
+
 ### The DRM device
 
 **Hyprland needs a DRM device with a display attached, and stock WSL2 kernels have none.** Aquamarine wants a device it can both allocate GBM buffers on and find a CRTC in. WSL2 exposes Microsoft's `/dev/dxg`, which is not a DRM device at all: on a stock kernel `/dev/dri` does not exist.
@@ -207,13 +215,23 @@ wayvnc binds the loopback only. WSL2 forwards localhost from Windows, so nothing
 
 Neither viewer needs dmabuf and neither negotiates a Wayland protocol version, which is why showing the session over VNC works at all. Nesting Hyprland directly in WSLg's Weston does not: that Weston is 9.0.0 and advertises `wl_compositor` v5 against the v6 aquamarine binds.
 
-**The viewer runs on Windows when one is installed.** `omarchy setup wsl viewer` fetches TigerVNC's standalone `vncviewer64.exe` — pinned version, pinned SHA256, since SourceForge publishes no signature — into `%LOCALAPPDATA%\Omarchy`, and the launcher starts it through interop. Without it the desktop still opens, in the `tigervnc` viewer inside WSL, which is why that package stays in the image.
+**The viewer runs on Windows when one is installed.** `omarchy setup wsl viewer` fetches two, into `%LOCALAPPDATA%\Omarchy`, and the launcher prefers them in order: TurboVNC, then TigerVNC, then the `tigervnc` viewer inside WSL — which is why that package stays in the image.
+
+TurboVNC is the one the desktop uses, because it is the only one that **grabs the keyboard in a window** (`-GrabKeyboard Always`). Without a grab, Windows keeps `SUPER` and every Omarchy binding is dead; TigerVNC grabs only in full screen ([upstream #1899](https://github.com/TigerVNC/tigervnc/issues/1899)). **CTRL-ALT-SHIFT-G** toggles the grab when you want Windows shortcuts back.
+
+Both are pinned by version and SHA256, since neither publisher signs the download. TurboVNC ships only an Inno Setup installer, so `omarchy-setup-wsl-viewer` fetches a pinned `innoextract` and **unpacks** it rather than running it: running it would put a VNC *server* on the Windows machine and ask for elevation. Its viewer is Java and carries its own JRE, so the whole tree is installed rather than a single file.
+
+Two of its parameters bite. Booleans take no value — `-Toolbar 0` prints usage and exits, `-noToolbar` is correct — and `-RecvClipboard 1` makes the viewer read the `1` as the hostname and sit on a connection dialog.
 
 The reason to prefer the Windows one is the clipboard. wayvnc already carries the selection both ways over `ext_data_control_manager_v1`, and neatvnc implements the extended clipboard, which is what carries UTF-8 — plain RFB cut text is latin-1. But a viewer running inside WSL bridges that to Xwayland's selection, not to the Windows clipboard. A native client bridges it to Windows.
 
 **The cursor is drawn once, by the viewer.** A headless output has no hardware cursor plane, so Hyprland composites the pointer straight into the framebuffer that wayvnc captures — and wayvnc forwards the cursor to the client as well, so the viewer shows two. `install/wsl/hypr.sh` turns the compositor's cursor off (`cursor.invisible`) and the launcher passes `-AlwaysCursor=1 -CursorType=System`, so the client draws the only pointer, locally and without a round trip.
 
-Dragging the window edge resizes the desktop to match. The viewer logs `SetDesktopSize failed: 4` when it does, which is misleading: result 4 is neatvnc's *request forwarded*, not a refusal. wayvnc applies the resize asynchronously — its debug log reads `Client resolution changed: … which is headless: yes` followed by `success` — and only a `HEADLESS-*` output is eligible, which is why the VKMS one is not the desktop.
+Dragging the window edge resizes the desktop to match, and only a `HEADLESS-*` output is eligible, which is why the VKMS one is not the desktop.
+
+That needs a patched neatvnc, built by `install/wsl/neatvnc.sh`. A VNC client only learns the server can resize by receiving an `ExtendedDesktopSize` rect, and stock neatvnc sends one only when the desktop actually resizes or when a client asks for a resize — while the first updates it sends are standalone cursor and desktop-name rects. TurboVNC decides at its first framebuffer update and never revisits it, logging `Disabling automatic desktop resizing because the server doesn't support it`, so the desktop never follows the window. TigerVNC is unaffected only because it assumes support optimistically.
+
+`install/wsl/patches/neatvnc-announce-desktop-size.patch` announces the layout as soon as the client's encodings are known, which is what the RFB spec expects. The leaf rebuilds the Arch package with that patch and a bumped `pkgrel`, so a plain `-Syu` does not silently drop it — but an upstream version bump will, until the patch lands upstream.
 
 ## Files
 
