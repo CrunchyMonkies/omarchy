@@ -133,6 +133,14 @@ Five commands go further and ask the user manager for a scope of their own, thro
 
 `bin/omarchy-launch-wsl-session` therefore starts the compositor as `env -u DISPLAY XDG_SESSION_TYPE=wayland dbus-run-session -- start-hyprland`. Toolkits then choose Wayland, and Hyprland supplies its own Xwayland for whatever still needs X. The launcher keeps its own `DISPLAY`, because the fallback viewer inside WSL is itself an X11 client of WSLg.
 
+### Audio
+
+**WSL has no sound hardware.** `/dev/snd` carries a timer and nothing else, so there is no card for ALSA to open and no device for PipeWire to drive. Sound leaves the machine through WSLg, which runs a PulseAudio server with an RDP sink that plays on the Windows side; `install/wsl/wslg.sh` points `PULSE_SERVER` at its socket.
+
+That covers applications speaking PulseAudio. It does not cover ALSA, and an ALSA application in that state does not fail loudly — it starts, draws its interface and plays silence, with `cannot find card '0'` buried where nobody looks. cliamp is one: it links `libasound` directly. On hardware the bridge comes from `pipewire-alsa`, but PipeWire's user services cannot run here at all without a systemd user manager, so `install/wsl/packages.sh` installs `alsa-plugins` for ALSA's own pulse plugin and `install/wsl/audio.sh` writes `/etc/asound.conf` pointing the default device at it.
+
+All of this depends on WSLg actually running, and WSLg only tries when the distribution starts. When its daemon fails there is no audio at all and no second path to fall back to, so `startx --diagnose` reports the PulseAudio server alongside everything else. `/mnt/wslg/stderr.log` records why WSLg failed; restarting the distribution is what retries it.
+
 ### Keybindings
 
 **Hyprland matches keybindings by keycode, and that does not work here.** The only keyboard in a WSL session is the virtual one wayvnc creates for the VNC client, and it carries its own keymap, so the keycodes never line up and not one binding fires. Typed text still reaches applications, which makes it look like the bindings are broken rather than the matching — a session where `SUPER + RETURN` does nothing but typing works is this, every time.

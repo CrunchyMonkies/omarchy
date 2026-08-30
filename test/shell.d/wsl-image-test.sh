@@ -234,6 +234,21 @@ grep -q 'audio:.*wslg_audio_present' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "startx --diagnose reports audio"
 pass "startx --diagnose reports whether audio is available"
 
+# WSL has no sound card, so ALSA has nothing to open and an ALSA application
+# starts, draws its interface and plays silence with no error to show for it --
+# which is exactly how cliamp behaved. The pulse plugin is the route to WSLg's
+# PulseAudio; on hardware pipewire-alsa does this, but pipewire's user services
+# cannot run without a systemd user manager.
+grep -q 'alsa-plugins' "$ROOT/install/wsl/packages.sh" ||
+  fail "the WSL image installs the ALSA pulse plugin"
+grep -q 'install -Dm644 /dev/stdin /etc/asound.conf' "$ROOT/install/wsl/audio.sh" ||
+  fail "install/wsl/audio.sh routes ALSA somewhere"
+grep -q 'pcm.!default { type pulse }' "$ROOT/install/wsl/audio.sh" ||
+  fail "install/wsl/audio.sh sends ALSA to the pulse server"
+grep -q 'wsl/audio.sh' "$ROOT/install/wsl/all.sh" ||
+  fail "install/wsl/all.sh runs audio.sh"
+pass "ALSA applications are routed to WSLg's PulseAudio"
+
 # The desktop itself does not need WSLg running: the viewer is a Windows
 # program and wayvnc serves it over the loopback. Only the mount is required,
 # so this check must stay a directory test -- tightening it to demand a live

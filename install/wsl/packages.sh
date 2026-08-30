@@ -29,7 +29,10 @@ fi
 #   tigervnc - the fallback viewer, used when no Windows one is installed. It
 #              shows the session in a WSLg window but cannot reach the Windows
 #              clipboard; omarchy-setup-wsl-viewer installs one that can
-packages+=(librsvg sudo seatd wayvnc tigervnc)
+#   alsa-plugins - the ALSA pulse plugin, so ALSA applications reach WSLg's
+#              PulseAudio. On hardware pipewire-alsa does this, but pipewire's
+#              user services cannot run here. install/wsl/audio.sh routes to it
+packages+=(librsvg sudo seatd wayvnc tigervnc alsa-plugins)
 
 echo "Installing ${#packages[@]} packages ($(read_package_list "$skip_list" | wc -l) skipped as WSL-inert)"
 
