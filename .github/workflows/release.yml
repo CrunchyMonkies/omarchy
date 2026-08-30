@@ -45,7 +45,7 @@ jobs:
         run: |
           pacman -Sy --noconfirm --needed \
             git jq lua ripgrep fd imagemagick libxkbcommon nodejs python \
-            desktop-file-utils diffutils sudo
+            desktop-file-utils diffutils sudo openssh
 
       - uses: actions/checkout@v4
 
@@ -63,12 +63,18 @@ jobs:
         #     Omarchy is already installed. Putting the checkout's own bin/ on
         #     PATH fixes this one and breaks theme-install-guards, which
         #     deliberately runs without it.
+        #   update-lock - asserts with kill -0 that omarchy-update's sleep
+        #     inhibitor has stopped, immediately after waiting on the update.
+        #     kill -0 succeeds against a zombie, so the assertion depends on
+        #     the stub's child being reaped first, and a loaded runner widens
+        #     that window. It passes reliably on a development machine.
         run: |
           mkdir -p "$RUNNER_TEMP/needs-a-maintainer-machine"
           mv test/shell.d/unowned-system-paths-test.sh \
              test/shell.d/snapper-test.sh \
              test/shell.d/config-test.sh \
              test/shell.d/hw-hybrid-gpu-test.sh \
+             test/shell.d/update-lock-test.sh \
              "$RUNNER_TEMP/needs-a-maintainer-machine/"
 
       - name: Run the CLI and shell suites
