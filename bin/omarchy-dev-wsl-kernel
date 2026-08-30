@@ -1,24 +1,23 @@
 #!/bin/bash
 
-# omarchy:summary=Build a WSL2 kernel that exposes a DRM render node
+# omarchy:summary=Build a WSL2 kernel that gives the desktop a KMS device
 # omarchy:group=dev
 # omarchy:args=[--output PATH] [--branch REF] [--jobs N]
 # omarchy:examples=omarchy dev wsl kernel --output ~/bzImage
 
 set -euo pipefail
 
-# Hyprland allocates its buffers through GBM, which needs a DRM render node —
-# even nested inside another compositor, which is how it runs on WSLg. Stock
-# WSL2 kernels expose Microsoft's /dev/dxg and no DRM device at all, so the
-# Omarchy session cannot start on one.
+# Hyprland's backend needs a DRM device: one to allocate buffers on through
+# GBM, and one with a CRTC to drive. Stock WSL2 kernels expose Microsoft's
+# /dev/dxg and no DRM device at all, so the Omarchy session cannot start on
+# one.
 #
-# This is a thin wrapper around the upstream instructions for the community
-# patches that register dxgkrnl adapters with the DRM subsystem. It is a
-# workaround for a WSL limitation, not something Omarchy owns, so it stays a
-# build-and-hand-over: it never installs anything or touches Windows config.
+# This builds the upstream WSL2 kernel with VKMS turned on, which is a full
+# KMS device and covers both roles. It is a workaround for a WSL limitation,
+# not something Omarchy owns, so it stays a build-and-hand-over: it never
+# installs anything or touches Windows config.
 
 KERNEL_REPO="https://github.com/microsoft/WSL2-Linux-Kernel.git"
-PATCH_REPO="https://github.com/0deep/wsl-dxgkrnl-drm-patches.git"
 BUILD_IMAGE="omarchy-wsl-kernel-build:$$"
 CONTAINER="omarchy-wsl-kernel-$$"
 
@@ -38,9 +37,9 @@ usage() {
   cat <<USAGE
 Usage: omarchy dev wsl kernel [--output PATH] [--branch REF] [--jobs N]
 
-Builds a WSL2 kernel carrying the dxgkrnl DRM patches, so /dev/dri/renderD128
-exists and 'startx' can bring up the Omarchy session inside WSLg. Writes
-bzImage in the current directory unless --output says otherwise.
+Builds a WSL2 kernel with VKMS turned on, so /dev/dri/card0 exists and
+'startx' can bring up the Omarchy session in a WSLg window. Writes bzImage
+in the current directory unless --output says otherwise.
 
   --output PATH   where to write the built bzImage
   --branch REF    WSL2-Linux-Kernel branch or tag (default: $branch)
@@ -144,49 +143,41 @@ step() { printf '\n\033[32m==> %s\033[0m\n' "$1"; }
 
 step "Cloning the WSL2 kernel ($KERNEL_BRANCH)"
 git clone --depth 1 --branch "$KERNEL_BRANCH" "$KERNEL_REPO" /kernel
-git clone --depth 1 "$PATCH_REPO" /patches
-
-step "Applying the dxgkrnl DRM patches"
-/patches/scripts/apply-patches.sh /kernel
 
 cd /kernel
 
 step "Configuring"
-# Seed from the running WSL kernel when there is one — it keeps every Hyper-V
-# and dxgkrnl option the host already depends on, and the patches only add to
-# it. Docker containers share the host kernel, so /proc/config.gz here is the
-# same config the distribution is running under.
-if [[ -r /proc/config.gz ]] && zcat /proc/config.gz | grep -q CONFIG_DXGKRNL; then
-  echo "Seeding .config from the running WSL kernel"
-  zcat /proc/config.gz >.config
-else
-  echo "Seeding .config from Microsoft/config-wsl"
-  cp Microsoft/config-wsl .config
-fi
+# Microsoft/config-wsl is the branch's own default and already carries every
+# Hyper-V and dxgkrnl option a WSL kernel needs, CONFIG_DXGKRNL=y included.
+# Seeding from the running kernel's /proc/config.gz instead would be
+# self-referential: once this machine boots a kernel this script built, the
+# next build seeds from its own output and any olddefconfig drift compounds.
+echo "Seeding .config from Microsoft/config-wsl"
+cp Microsoft/config-wsl .config
 
-# The DRM device the patches register is the whole point, and dxgkrnl is built
-# in, so the helpers it links against have to be built in too rather than left
-# as modules.
+# VKMS is the whole point of this build. It is a full KMS device, so it gives
+# the compositor both a CRTC to drive and a node to allocate GBM buffers on --
+# neither of which WSL offers otherwise. The upstream default leaves it off.
 #
-# VKMS supplies the CRTC and connector dxgkrnl does not have. Aquamarine's DRM
-# backend rejects dxgkrnl outright -- "Device /dev/dri/card0 does not support
-# kms" -- because the patches register a render-only node with nothing to scan
-# out to. VKMS is a full KMS device, so it gives the compositor a display to
-# drive. It has to be built in rather than a module: the kernel loads a module
-# on first use by running /sbin/modprobe, and under WSL2 that runs in the
-# utility VM's root rather than the distribution's, where neither modprobe nor
+# It has to be built in rather than a module: the kernel loads a module on
+# first use by running /sbin/modprobe, and under WSL2 that runs in the utility
+# VM's root rather than the distribution's, where neither modprobe nor
 # /lib/modules exists. Nothing would ever load it, so the display device has to
-# be there at boot.
+# be there at boot. That in turn forces the helper it selects to be built in
+# too, which the upstream default leaves as a module.
 cat >>.config <<'FRAGMENT'
-CONFIG_DRM=y
 CONFIG_DRM_GEM_SHMEM_HELPER=y
-CONFIG_DXGKRNL=y
 CONFIG_DRM_VKMS=y
 FRAGMENT
 
 make olddefconfig
 
-for option in CONFIG_DRM=y CONFIG_DXGKRNL=y CONFIG_DRM_VKMS=y; do
+# CONFIG_DRM and CONFIG_DXGKRNL come from the upstream default rather than the
+# fragment; they are asserted anyway so a change upstream cannot quietly leave
+# the kernel without a DRM subsystem. The shmem helper is the one that fails
+# silently: kconfig will drag CONFIG_DRM_VKMS back down to a module rather than
+# let a built-in symbol depend on one.
+for option in CONFIG_DRM=y CONFIG_DXGKRNL=y CONFIG_DRM_GEM_SHMEM_HELPER=y CONFIG_DRM_VKMS=y; do
   if ! grep -qx "$option" .config; then
     echo "Error: $option did not survive olddefconfig; the kernel would have no usable DRM device." >&2
     exit 1
@@ -220,7 +211,6 @@ docker run \
   --cpus "$docker_cpus" \
   --memory "${docker_memory_gb}g" \
   --env "KERNEL_REPO=$KERNEL_REPO" \
-  --env "PATCH_REPO=$PATCH_REPO" \
   --env "KERNEL_BRANCH=$branch" \
   --env "KERNEL_JOBS=$jobs" \
   "$BUILD_IMAGE" \
@@ -260,9 +250,13 @@ To use it:
 
        wsl --shutdown
 
-  5. Start the distribution again and confirm the node arrived:
+  5. Start the distribution again and confirm the device arrived:
 
-       ls /dev/dri/renderD128
+       ls /dev/dri/card0
        startx --diagnose
+
+The modules land under /lib/modules/\$(uname -r), and this kernel reports a
+different release than a stock one, so an older directory is left behind
+rather than replaced. Removing it is optional.
 
 NOTE
