@@ -26,7 +26,9 @@ fi
 #              logind's job, but WSL has no seat for logind to manage
 #   wayvnc   - serves the session on 127.0.0.1, since there is no display to
 #              scan out to. See omarchy-launch-wsl-session
-#   tigervnc - the viewer that turns that into a WSLg window, over plain X11
+#   tigervnc - the fallback viewer, used when no Windows one is installed. It
+#              shows the session in a WSLg window but cannot reach the Windows
+#              clipboard; omarchy-setup-wsl-viewer installs one that can
 packages+=(librsvg sudo seatd wayvnc tigervnc)
 
 echo "Installing ${#packages[@]} packages ($(read_package_list "$skip_list" | wc -l) skipped as WSL-inert)"

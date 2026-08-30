@@ -88,6 +88,32 @@ for shim in uwsm-app uwsm; do
 done
 pass "install/wsl/uwsm.sh shims uwsm-app and uwsm"
 
+# The viewer runs on Windows so the session can reach the Windows clipboard; an
+# X11 viewer inside WSLg bridges to Xwayland instead. The fallback has to stay,
+# because nothing on a fresh Windows install provides a VNC client.
+grep -q 'windows_viewer()' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session prefers a Windows viewer"
+grep -q 'vncviewer -SecurityTypes None' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session still falls back to the viewer inside WSL"
+pass "omarchy-launch-wsl-session prefers the Windows viewer and falls back"
+
+# SourceForge publishes no signature for the download, so the pinned digest is
+# the only integrity check there is. A version bump that forgets it is exactly
+# what this catches.
+grep -qE '^VIEWER_SHA256=[0-9a-f]{64}$' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
+  fail "omarchy-setup-wsl-viewer pins a sha256 for the download"
+grep -qE '^VIEWER_VERSION=[0-9.]+$' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
+  fail "omarchy-setup-wsl-viewer pins a version"
+pass "omarchy-setup-wsl-viewer pins both a version and a checksum"
+
+# A headless output has no hardware cursor plane, so the compositor draws the
+# cursor into the frame and the viewer draws another. One of them has to go.
+grep -q 'invisible = true' "$ROOT/install/wsl/hypr.sh" ||
+  fail "install/wsl/hypr.sh turns off the compositor cursor"
+grep -q 'AlwaysCursor=1' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "omarchy-launch-wsl-session has the viewer draw the cursor instead"
+pass "the cursor is drawn once, by the viewer"
+
 # run_logged sources each path verbatim, so a typo here fails the whole install
 # halfway through a build rather than at review time.
 missing=""

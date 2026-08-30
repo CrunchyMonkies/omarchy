@@ -1,0 +1,117 @@
+#!/bin/bash
+
+# omarchy:summary=Install the Windows VNC viewer the WSL desktop opens in
+# omarchy:group=setup
+# omarchy:examples=omarchy setup wsl viewer
+
+set -euo pipefail
+
+# The WSL desktop is served by wayvnc and shown in a VNC client. A client
+# running on Windows gets a native window and, more to the point, the Windows
+# clipboard: wayvnc already carries the selection both ways over
+# ext_data_control_manager_v1, but a viewer running inside WSL bridges that to
+# Xwayland rather than to Windows.
+#
+# Windows ships no VNC client, so this fetches TigerVNC's standalone viewer --
+# the same project and the same version as the tigervnc package in the image,
+# and one that speaks the extended clipboard, which is what carries UTF-8.
+#
+# Nothing is installed on the Linux side and no Windows setting is changed:
+# the viewer is a single executable dropped in the user's own AppData.
+
+VIEWER_VERSION=1.16.2
+VIEWER_SHA256=58396d99556026da6b906c9ed51ad6cb5c840cc3fb65e53653c52ca5a80bfad9
+VIEWER_URL="https://sourceforge.net/projects/tigervnc/files/stable/$VIEWER_VERSION/vncviewer64-$VIEWER_VERSION.exe/download"
+
+usage() {
+  cat <<USAGE
+Usage: omarchy setup wsl viewer [--force]
+
+Downloads TigerVNC $VIEWER_VERSION's Windows viewer to your Windows profile, so
+'startx' opens the Omarchy desktop in a native Windows window with a
+shared clipboard.
+
+  --force   re-download even when the viewer is already installed
+
+Without it the desktop still opens, in the viewer inside WSL, which has no
+access to the Windows clipboard.
+USAGE
+}
+
+force=0
+
+while (($#)); do
+  case "$1" in
+    --force)
+      force=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ ! -d /mnt/c/Windows ]]; then
+  echo "Error: this only applies to Omarchy running under WSL." >&2
+  exit 1
+fi
+
+# The same interop idiom as default/wsl/oobe.sh: cmd.exe is what can answer,
+# it prints a UNC working-directory warning first, and its output is CRLF.
+local_app_data=$(/mnt/c/Windows/System32/cmd.exe /c "echo %LOCALAPPDATA%" 2>/dev/null | tail -1 | tr -d '\r\n')
+
+if [[ -z $local_app_data ]]; then
+  echo "Error: could not ask Windows where LOCALAPPDATA is." >&2
+  echo "Check that interop is enabled in /etc/wsl.conf." >&2
+  exit 1
+fi
+
+viewer_dir="$(wslpath -u "$local_app_data")/Omarchy"
+viewer="$viewer_dir/vncviewer64.exe"
+
+installed() {
+  [[ -f $viewer ]] && [[ $(sha256sum "$viewer" | cut -d' ' -f1) == "$VIEWER_SHA256" ]]
+}
+
+if (( ! force )) && installed; then
+  echo "TigerVNC $VIEWER_VERSION is already installed at $viewer"
+  echo "Run 'startx' to open the desktop."
+  exit 0
+fi
+
+echo "Downloading TigerVNC $VIEWER_VERSION for Windows"
+
+download=$(mktemp)
+trap 'rm -f "$download"' EXIT
+
+# SourceForge answers with a redirect to a mirror, hence -L.
+if ! curl -fL --retry 3 --progress-bar -o "$download" "$VIEWER_URL"; then
+  echo "Error: could not download the viewer from $VIEWER_URL" >&2
+  exit 1
+fi
+
+# SourceForge publishes no signature for this file, so the digest is pinned
+# here instead. It is what makes every run after the first one -- and every
+# other machine -- safe from a substituted download.
+actual=$(sha256sum "$download" | cut -d' ' -f1)
+
+if [[ $actual != "$VIEWER_SHA256" ]]; then
+  echo "Error: the download does not match the expected checksum; not installing it." >&2
+  echo "  expected $VIEWER_SHA256" >&2
+  echo "  got      $actual" >&2
+  exit 1
+fi
+
+mkdir -p "$viewer_dir"
+install -m755 "$download" "$viewer"
+
+echo
+echo "Installed $viewer"
+echo "Run 'startx' to open the Omarchy desktop in a Windows window."

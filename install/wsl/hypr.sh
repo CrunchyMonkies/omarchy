@@ -25,3 +25,25 @@ if ! grep -q 'output = "Virtual-1"' "$skel_monitors"; then
 hl.monitor({ output = "Virtual-1", disabled = true })
 MONITOR
 fi
+
+# A headless output has no hardware cursor plane, so Hyprland composites the
+# cursor straight into the framebuffer that wayvnc captures -- and wayvnc
+# forwards the cursor to the client as well, so the viewer draws two. Turning
+# the compositor's cursor off leaves the client to draw the only one, which it
+# does locally and therefore without a round trip. omarchy-launch-wsl-session
+# passes the viewer -AlwaysCursor=1 to make it do so.
+skel_looknfeel=/etc/skel/.config/hypr/looknfeel.lua
+
+if [[ ! -f $skel_looknfeel ]]; then
+  echo "Error: $skel_looknfeel is missing; omarchy-settings should have shipped it." >&2
+  exit 1
+fi
+
+if ! grep -q 'invisible = true' "$skel_looknfeel"; then
+  cat >>"$skel_looknfeel" <<'CURSOR'
+
+-- WSL: the desktop is served over VNC and the client draws the pointer, so the
+-- compositor must not draw one as well. See omarchy-launch-wsl-session.
+hl.config({ cursor = { invisible = true } })
+CURSOR
+fi
