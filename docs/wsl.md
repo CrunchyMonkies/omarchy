@@ -272,7 +272,13 @@ wsl --shutdown
 
 **No DRM render node may be present.** Community kernel patches exist that give `dxgkrnl` a DRM driver, and they are actively harmful here: they add a `renderD` node that Mesa has no driver for, aquamarine prefers it over the KMS fd anyway, and then every buffer import against it fails. The desktop draws, but screen capture hangs and window resizes never apply. Omarchy's kernel deliberately does not carry those patches, so `/dev/dri` holds `card0` alone. `/dev/dxg` is a separate char device and is untouched, so WSL's own GPU passthrough is unaffected. `start-omarchy --diagnose` calls out a stray `renderD*` for this reason.
 
-Rendering is entirely software. There is no GPU here Mesa can drive, so the launcher sets `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`; without them EGL dies with `DRI2: failed to load driver`.
+Rendering uses the host GPU when there is one. WSL shares it through `/dev/dxg` — a char device, not a DRM one, which is why the render-node rule above leaves it untouched — and Mesa's `d3d12` driver drives it, with the host half mounted at `/usr/lib/wsl/lib` and put on the linker path by WSL's own `/etc/ld.so.conf.d/ld.wsl.conf`.
+
+Mesa will not find it unaided. With no DRM render node there is nothing to auto-detect from, so it falls back to llvmpipe and the driver has to be named: `gpu_render_available()` checks for `/dev/dxg`, `d3d12_dri.so`, `libd3d12core.so` and `libdxcore.so`, and the launcher sets `GALLIUM_DRIVER=d3d12` and `LIBVA_DRIVER_NAME=d3d12` when all four are there. Missing any of them — GPU support turned off, an older WSL — it sets `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe` as it always did, and `startomarchy --diagnose` names which piece is absent.
+
+This used to read "there is no GPU here Mesa can drive", which was true of the DRM render node that claim was tested against and never true of `/dev/dxg`. The distinction matters: the compositor allocates on VKMS and renders on the GPU, and that cross-device import is the same shape as the one that failed when a `dxgkrnl` render node was tried. `OMARCHY_WSL_SOFTWARE_RENDER=1` forces software rendering back, because a failure there only shows once the desktop is up.
+
+There is no Vulkan. `/usr/share/vulkan/icd.d` does not exist, so `vulkan-icd-loader` has no driver behind it. Hyprland renders with GLES, so the session does not care, but anything that asks for Vulkan will not find it.
 
 `seatd` is how aquamarine opens the device. On hardware that is logind's job, but logind manages seats it finds on a real machine and WSL has none, so `install/wsl/services.sh` enables `seatd.service` and `install/wsl/groups.sh` records the `seat`, `video` and `render` groups for the account the OOBE creates.
 

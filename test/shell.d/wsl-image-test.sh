@@ -37,6 +37,55 @@ grep -q 'systemctl --root=/ set-default multi-user.target' "$ROOT/install/wsl/se
   fail "install/wsl/services.sh boots to multi-user.target"
 pass "install/wsl/services.sh boots to multi-user.target"
 
+# Rendering. None of this area was covered before, so the launcher could have
+# silently gone back to forcing software on every machine and nothing would say.
+launcher="$ROOT/bin/omarchy-launch-wsl-session"
+
+# The GPU arrives on /dev/dxg, a char device. The render-node rule above is
+# about DRM nodes and must keep leaving it alone, or the two collide.
+grep -q '\[\[ -e /dev/dxg \]\]' "$launcher" ||
+  fail "the launcher looks for the GPU where WSL puts it"
+grep -q 'compgen -G "/dev/dri/renderD\*"' "$launcher" ||
+  fail "the render-node detector still stands, and still means DRM nodes only"
+pass "the GPU is found on /dev/dxg without disturbing the render-node rule"
+
+# Detected, not forced. Mesa cannot auto-detect with no DRM render node to probe,
+# so d3d12 has to be named -- but only when the pieces behind it are there.
+grep -q 'GALLIUM_DRIVER=d3d12' "$launcher" ||
+  fail "the launcher names the d3d12 driver, since Mesa will not find it alone"
+grep -q 'GALLIUM_DRIVER=llvmpipe' "$launcher" ||
+  fail "the launcher still falls back to software when there is no GPU"
+grep -q 'OMARCHY_WSL_SOFTWARE_RENDER' "$launcher" ||
+  fail "software rendering can be forced back from outside the session"
+pass "the renderer is detected, with a fallback and a way to force it"
+
+# The compositor allocating on VKMS while rendering elsewhere is the import that
+# failed last time this was attempted. Linear buffers are what make it possible.
+grep -q 'AQ_NO_MODIFIERS=1' "$launcher" ||
+  fail "buffers stay linear, which is what lets the allocator and renderer agree"
+pass "buffers stay linear for the allocator and the renderer to share"
+
+# The detection itself, run rather than read, against a filesystem with none of
+# it: the fallback is the path every non-GPU machine takes, so it has to hold.
+render_fn=$(sed -n '/^render_summary()/,/^}/p;/^gpu_render_available()/,/^}/p' "$launcher")
+
+verdict=$(bash -c "$render_fn"$'\n''gpu_render_available && echo gpu || echo software')
+[[ $verdict == software ]] ||
+  fail "detection says software when the GPU pieces are absent" "got: $verdict"
+
+# And it names what is missing. "llvmpipe" alone tells someone with a working
+# GPU nothing about which piece their machine is short of.
+summary=$(bash -c "$render_fn"$'\n''render_summary')
+[[ $summary == *"llvmpipe"* ]] ||
+  fail "the diagnosis reports the software renderer" "got: $summary"
+[[ $summary == *"missing"* ]] ||
+  fail "the diagnosis names the missing piece" "got: $summary"
+
+forced=$(OMARCHY_WSL_SOFTWARE_RENDER=1 bash -c "$render_fn"$'\n''render_summary')
+[[ $forced == *"forced"* ]] ||
+  fail "the diagnosis says when software was asked for rather than fallen back to" "got: $forced"
+pass "the renderer diagnosis names the missing piece, and an override as an override"
+
 # The session reaches the VKMS device through libseat, and logind has no seat to
 # offer it here. Without seatd running, start-omarchy cannot open /dev/dri/card0.
 grep -q 'systemctl --root=/ enable seatd.service' "$ROOT/install/wsl/services.sh" ||

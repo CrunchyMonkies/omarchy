@@ -111,6 +111,45 @@ stray_render_node() {
   compgen -G "/dev/dri/renderD*" >/dev/null
 }
 
+# WSL does share the host GPU, through /dev/dxg -- a char device, not a DRM
+# one, which is why it survives the render-node rule above untouched. Mesa's
+# d3d12 driver drives it, and WSL mounts the host half at /usr/lib/wsl/lib and
+# puts it on the linker path itself via /etc/ld.so.conf.d/ld.wsl.conf.
+#
+# Mesa will not find it on its own: with no DRM render node to probe there is
+# nothing to auto-detect from, and it falls back to llvmpipe. The driver has to
+# be named. This checks the four things that have to be there before naming it
+# is worth doing; a machine with GPU support turned off is missing /dev/dxg and
+# renders in software as it always did.
+gpu_render_available() {
+  [[ -e /dev/dxg ]] || return 1
+  [[ -e /usr/lib/dri/d3d12_dri.so ]] || return 1
+  [[ -e /usr/lib/wsl/lib/libd3d12core.so ]] || return 1
+  [[ -e /usr/lib/wsl/lib/libdxcore.so ]] || return 1
+}
+
+# What --diagnose says about rendering. Naming the missing piece matters more
+# than the verdict: "llvmpipe" alone leaves someone with a working GPU no idea
+# which of the four things below their machine is short of.
+render_summary() {
+  if [[ ${OMARCHY_WSL_SOFTWARE_RENDER:-0} == 1 ]]; then
+    echo "llvmpipe (forced by OMARCHY_WSL_SOFTWARE_RENDER)"
+    return
+  fi
+
+  local missing=()
+  [[ -e /dev/dxg ]] || missing+=(/dev/dxg)
+  [[ -e /usr/lib/dri/d3d12_dri.so ]] || missing+=(d3d12_dri.so)
+  [[ -e /usr/lib/wsl/lib/libd3d12core.so ]] || missing+=(libd3d12core.so)
+  [[ -e /usr/lib/wsl/lib/libdxcore.so ]] || missing+=(libdxcore.so)
+
+  if (( ${#missing[@]} )); then
+    echo "llvmpipe — no GPU (missing ${missing[*]})"
+  else
+    echo "d3d12 on the host GPU through /dev/dxg"
+  fi
+}
+
 # libseat is how aquamarine opens the device. logind answers on hardware, but
 # it manages seats it finds on a real machine and WSL has none.
 seatd_running() {
@@ -145,6 +184,7 @@ diagnose() {
   echo "  audio:       $(wslg_audio_present && echo "PulseAudio at /mnt/wslg/PulseServer" || echo "MISSING — no sound")"
   echo "  KMS device:  ${device:-MISSING}"
   echo "  render node: $(stray_render_node && echo "present — see below" || echo "none, as expected")"
+  echo "  renderer:    $(render_summary)"
   echo "  seatd:       $(seatd_running && echo "running" || echo "NOT RUNNING")"
   echo "  session:     $(session_running && echo "Hyprland already running" || echo "not running")"
   echo
@@ -275,12 +315,30 @@ export PULSE_SERVER="${PULSE_SERVER:-unix:/mnt/wslg/PulseServer}"
 unset WAYLAND_DISPLAY
 
 export AQ_DRM_DEVICES="$drm_device"
+
+# Linear buffers. This arrived with the abandoned design that nested inside
+# WSLg's Weston and lost its justification when that went, but it earns its
+# place again here: the compositor allocates on VKMS and renders on the GPU
+# below, and a linear buffer is the one both ends can agree on.
 export AQ_NO_MODIFIERS=1
 
-# There is no GPU here Mesa can drive, and without being told so EGL dies with
-# "DRI2: failed to load driver". llvmpipe is the whole renderer.
-export LIBGL_ALWAYS_SOFTWARE=1
-export GALLIUM_DRIVER=llvmpipe
+# The GPU, when there is one. This used to read "there is no GPU here Mesa can
+# drive" and force llvmpipe, which was true of the DRM render node that idea was
+# tested against and never true of /dev/dxg -- see gpu_render_available.
+#
+# OMARCHY_WSL_SOFTWARE_RENDER is the way back. The compositor allocating on VKMS
+# and rendering on d3d12 is the same shape as the import that failed when this
+# was last attempted through a dxgkrnl render node, and if it fails again it
+# fails after the desktop is up, where there is nothing left to edit a file
+# with. Applications are unaffected either way.
+if [[ ${OMARCHY_WSL_SOFTWARE_RENDER:-0} == 1 ]] || ! gpu_render_available; then
+  export LIBGL_ALWAYS_SOFTWARE=1
+  export GALLIUM_DRIVER=llvmpipe
+else
+  export GALLIUM_DRIVER=d3d12
+  # The same driver decodes video, which is what mpv and Chromium reach for.
+  export LIBVA_DRIVER_NAME=d3d12
+fi
 
 export XDG_CURRENT_DESKTOP=Hyprland
 export XDG_SESSION_TYPE=wayland
