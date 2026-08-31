@@ -479,6 +479,85 @@ grep -q 'for package in neatvnc wayvnc hyprland' "$ROOT/install/wsl/neatvnc.sh" 
   fail "install/wsl/neatvnc.sh checks the prune did not take the session with it"
 pass "the neatvnc build toolchain does not stay in the image"
 
+# The prune arithmetic itself, run against a stubbed pacman rather than read.
+# This is the piece that could quietly take the session out of the image, so the
+# question is what it hands to pacman -Rns: the difference between the two
+# queries, which is mostly dependencies, and nothing that was already there.
+transient_dir=$(mktemp -d)
+trap 'rm -rf "$transient_dir"' EXIT
+
+cat >"$transient_dir/pacman" <<'STUB'
+#!/bin/bash
+case "$1" in
+  -Qq)
+    cat "$PACMAN_STATE"
+    ;;
+  -S)
+    # --needed: install what is not already there, and its dependencies with it.
+    for package in "$@"; do
+      [[ $package == -* ]] && continue
+      grep -qxF "$package" "$PACMAN_STATE" || printf '%s\n' "$package" >>"$PACMAN_STATE"
+      for dependency in $(eval "printf '%s' \"\${DEPS_${package//-/_}:-}\""); do
+        grep -qxF "$dependency" "$PACMAN_STATE" || printf '%s\n' "$dependency" >>"$PACMAN_STATE"
+      done
+    done
+    ;;
+  -Rns)
+    shift
+    for package in "$@"; do
+      [[ $package == -* ]] && continue
+      printf '%s\n' "$package" >>"$PACMAN_REMOVED"
+      grep -vxF "$package" "$PACMAN_STATE" >"$PACMAN_STATE.new" || true
+      mv "$PACMAN_STATE.new" "$PACMAN_STATE"
+    done
+    ;;
+esac
+exit 0
+STUB
+chmod +x "$transient_dir/pacman"
+
+export PACMAN_STATE="$transient_dir/installed" PACMAN_REMOVED="$transient_dir/removed"
+printf '%s\n' hyprland wayvnc neatvnc fakeroot glibc | sort >"$PACMAN_STATE"
+: >"$PACMAN_REMOVED"
+
+# base-devel drags in a toolchain, and fakeroot is both one of its members and
+# already installed from the base manifest -- the overlap that used to make
+# removing any of this awkward.
+PATH="$transient_dir:$PATH" \
+  DEPS_base_devel="gcc binutils make patch debugedit fakeroot" \
+  DEPS_meson="python ninja" \
+  bash -c '
+    source "$1/install/helpers/transient-packages.sh"
+    omarchy_transient_packages_begin base-devel meson ninja
+    omarchy_transient_packages_end
+  ' transient "$ROOT" >/dev/null
+
+removed=$(sort -u "$PACMAN_REMOVED")
+
+for package in base-devel meson ninja gcc binutils make patch debugedit python; do
+  grep -qxF "$package" <<<"$removed" ||
+    fail "the prune removes the toolchain and what it dragged in" "kept $package"
+done
+pass "the prune removes the toolchain and everything it dragged in"
+
+for package in fakeroot hyprland wayvnc neatvnc glibc; do
+  ! grep -qxF "$package" <<<"$removed" ||
+    fail "the prune leaves what was already installed alone" "removed $package"
+done
+pass "the prune leaves what was already installed alone, fakeroot included"
+
+# A step that installed nothing must remove nothing, rather than reach pacman
+# -Rns with an empty argument list.
+: >"$PACMAN_REMOVED"
+PATH="$transient_dir:$PATH" bash -c '
+  source "$1/install/helpers/transient-packages.sh"
+  omarchy_transient_packages_begin hyprland
+  omarchy_transient_packages_end
+' transient "$ROOT" >/dev/null
+[[ ! -s $PACMAN_REMOVED ]] ||
+  fail "a step that installed nothing removes nothing" "$(<"$PACMAN_REMOVED")"
+pass "a step that installed nothing removes nothing"
+
 # The .ico is one file and ImageMagick is a large way to make it.
 grep -q 'omarchy_transient_packages_begin imagemagick librsvg' "$ROOT/install/wsl/image.sh" ||
   fail "install/wsl/image.sh installs the icon renderer transiently"
