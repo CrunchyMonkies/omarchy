@@ -8,27 +8,25 @@ For how any of this works — the DRM device, the session model, the VNC path �
 
 ## Quickstart
 
-The image is built from this checkout — it gzips to around 5 GB, past what a GitHub release asset may be, so there is nothing to download. The kernel is published, because it takes hours to build and is small.
-
-```bash
-omarchy dev wsl build --output ~/omarchy.wsl
-```
-
-Then from PowerShell on Windows, pointing at what you just built:
+From PowerShell on Windows:
 
 ```powershell
-.\Install-Omarchy.ps1 -ImagePath C:\path\to\omarchy.wsl
+irm https://github.com/CrunchyMonkies/omarchy/releases/latest/download/Install-Omarchy.ps1 -OutFile Install-Omarchy.ps1
+.\Install-Omarchy.ps1
 ```
 
-That fetches the kernel from the latest release, sets up `.wslconfig`, imports the image and unpacks the modules. Then `omarchy setup wsl viewer` and `start-omarchy` inside the distribution.
+That fetches the image and the kernel from the latest release, verifies both against its `SHA256SUMS`, sets up `.wslconfig`, imports the image and unpacks the modules. The **first launch of the distribution installs Omarchy itself** — it asks for what it needs, then downloads several gigabytes, so give it a network connection and some time. Then `omarchy setup wsl viewer` and `start-omarchy` inside the distribution.
+
+You can build the image yourself instead and pass it with `-ImagePath`; step 2 covers that.
 
 The rest of this file is that in full, plus what to do when a piece of it does not work.
 
 ## What you need
 
 - WSL 2 with WSLg (`wsl --version` reports both; if that command is not recognised, run `wsl --install` and `wsl --update`)
-- Docker on the machine you build from
-- About 50 GB free while building, and about 25 GB where the distribution will live
+- A network connection for the first launch, which is where Omarchy is actually installed
+- About 25 GB where the distribution will live
+- Docker and about 20 GB more, only if you build the image yourself rather than downloading it
 
 Nothing on the Windows side needs administrator rights.
 
@@ -48,26 +46,34 @@ Builds `microsoft/WSL2-Linux-Kernel` with VKMS turned on, in a Debian container,
 
 Pass it later with `-KernelPath`.
 
-## 2. Build the image
+## 2. Get the image
+
+`omarchy-<tag>.wsl` is attached to every [release](https://github.com/CrunchyMonkies/omarchy/releases), and `Install-Omarchy.ps1` fetches it for you. Nothing to do here.
+
+**Or build it**, to run the code in your checkout:
 
 ```bash
 omarchy dev wsl build --output ~/omarchy.wsl
 ```
 
-Builds on top of the official Arch Linux WSL rootfs, overlaying this checkout at `/usr/local/share/omarchy` so the image runs the code you have. Pass `--no-dev-link` to ship the released `/usr/share/omarchy` instead.
+Builds on top of the official Arch Linux WSL rootfs, overlaying this checkout at `/usr/local/share/omarchy` so the image runs the code you have. Pass `--no-dev-link` to ship the released `/usr/share/omarchy` instead, which is what a release build does.
 
-Takes tens of minutes, mostly installing packages, and needs no root on the host — everything happens inside Docker.
+Takes a few minutes and needs no root on the host — everything happens inside Docker. What it produces is a bootstrap: the setup screen, the metadata Windows reads, and little else. The desktop, the tools and the configuration are installed by the first launch, not baked in. That is what keeps the tarball under GitHub's 2 GiB limit for a release asset; `--assert-max-size` holds it there.
+
+Pass it later with `-ImagePath`.
 
 ## 3. Install on Windows
 
 ### With the installer
 
-Copy `~/omarchy.wsl` somewhere Windows can read, then from PowerShell:
+From PowerShell:
 
 ```powershell
 irm https://github.com/CrunchyMonkies/omarchy/releases/latest/download/Install-Omarchy.ps1 -OutFile Install-Omarchy.ps1
-.\Install-Omarchy.ps1 -ImagePath C:\Users\<you>\omarchy.wsl
+.\Install-Omarchy.ps1
 ```
+
+Add `-ImagePath C:\Users\<you>\omarchy.wsl` to import an image you built rather than the release's.
 
 | Option | What it does |
 | --- | --- |
@@ -106,7 +112,9 @@ wsl --shutdown
 wsl --install --from-file C:\Users\<you>\omarchy.wsl --location C:\Users\<you>\WSL\Omarchy --name Omarchy
 ```
 
-On first launch the OOBE creates your account, named after your Windows sign-in, and finishes provisioning. There is nothing to answer unless your Windows name contains characters a UNIX name cannot.
+On first launch the OOBE installs Omarchy — several gigabytes over the network, so it takes a while — then creates your account, named after your Windows sign-in, and finishes provisioning. There is nothing to answer unless your Windows name contains characters a UNIX name cannot.
+
+If it fails partway, most likely on a network that went away, nothing is lost: the next shell you open offers to pick up where it left off, and `sudo /etc/oobe.sh` does the same on demand. The log is `/var/log/omarchy-install.log`.
 
 **3. Unpack the kernel modules.** The `kernel=` setting is **global**: every distribution on the machine now boots this kernel, and a `bzImage` alone is not a drop-in replacement — the stock WSL kernel keeps most of itself as modules. Unpack them into **every** distribution:
 
@@ -132,8 +140,6 @@ The desktop is served over VNC and shown in a client. Windows ships no VNC clien
 TurboVNC is the one the desktop uses, because it is the only one that grabs the keyboard in a window. Without a grab Windows keeps `SUPER` and none of the keybindings reach the session. Its installer is unpacked rather than run, so no VNC *server* is installed on Windows and nothing asks for elevation.
 
 This is the one step the image cannot do for you: it runs in a build container with no Windows to write to.
-
-Re-run it after upgrading an existing distribution: the shortcut records the command it starts, and the entry point was renamed from `startx` to `start-omarchy`.
 
 Without it the desktop still opens, in the viewer inside WSL. That one cannot reach the Windows clipboard and never receives `SUPER`.
 
@@ -199,7 +205,7 @@ One rule shapes all of it: **WSL knowledge is quarantined.** It lives in `instal
 
 | Fix | Where | Why |
 | --- | --- | --- |
-| `start-omarchy` shimmed into `/usr/local/bin` to run `omarchy-launch-wsl-session` | `install/wsl/wslg.sh` | The desktop never starts on its own, so the image has to give users an entry point, and uwsm cannot be the session leader |
+| `start-omarchy` shimmed into `/usr/local/bin` to run `omarchy-launch-wsl-session` | `install/wsl/wslg.sh` | `start-omarchy` is what people reach for, there is no X server to start, and uwsm cannot be the session leader |
 | `uwsm-app` shimmed to run the command under `setsid --fork` | `install/wsl/uwsm.sh` | Omarchy launches everything through `uwsm-app`, which asks `wayland-wm-app-daemon.service` for a scope. Without the shim the desktop starts and can launch nothing |
 | `uwsm stop` translated to `hyprctl dispatch 'hl.dsp.exit()'` | `install/wsl/uwsm.sh` | The Lua config wants the dispatcher form; plain `hyprctl dispatch exit` is a syntax error under it, returns 7, and leaves the session running |
 | `systemd-run --user` shimmed, `--user` only | `install/wsl/systemd-run.sh` | Five commands schedule through it and fail before starting anything. `omarchy-launch-browser` passes `StandardError=null`, so the browser simply never appeared. The system manager works and must not be intercepted |
@@ -286,7 +292,14 @@ One rule shapes all of it: **WSL knowledge is quarantined.** It lives in `instal
 | `kernel-modules-hook`, `wireless-regdb` | The kernel comes from Windows, and the regulatory database applies to radios WSL does not expose |
 | `tzupdate` | WSL syncs the clock with the Windows host |
 
-Added for WSL only: `librsvg` (an SVG delegate for ImageMagick, for the shortcut icon), `sudo` (absent from the Arch WSL rootfs), `seatd`, `wayvnc`, `tigervnc` and `alsa-plugins`.
+| `qemu-user-static-binfmt` | Foreign-architecture emulation for a machine that runs one architecture, and the largest package in the manifest |
+| `plocate` | Both the `locate` config step and the `updatedb` run are skipped, so no database is ever built |
+| `wireplumber` | PipeWire's session manager, and there is no systemd user manager to run PipeWire under |
+| `man-db` | `install/wsl/pacman-noextract.sh` keeps the man pages out, so there is nothing to index. `tldr` stays |
+
+Added for WSL only: `sudo` (absent from the Arch WSL rootfs), `seatd`, `wayvnc`, `tigervnc` and `alsa-plugins`.
+
+`install/wsl/omarchy-wsl-bootstrap.packages` is a third list, and a much shorter one: `sudo`, `gum` and `ttfx`, the only packages the image carries before the first run installs everything else. `install/wsl/image.sh` and `install/wsl/neatvnc.sh` each need a toolchain for one step — ImageMagick for the shortcut icon, `base-devel` for the neatvnc build — and `install/helpers/transient-packages.sh` takes both back out afterwards, along with everything they dragged in.
 
 ### What a distributable image may contain
 
@@ -300,8 +313,11 @@ Added for WSL only: `librsvg` (an SVG delegate for ImageMagick, for the shortcut
 | `generateResolvConf` on, paired with the masked `systemd-resolved` | `default/wsl/wsl.conf` | So the two cannot fight over the file |
 | No `[user] default`; `[oobe] defaultUid = 1000` and `defaultName = Omarchy` instead | `default/wsl/wsl.conf`, `default/wsl/wsl-distribution.conf` | A pinned name would be wrong for anyone who picks a different one, and `wsl --install --from-file` needs a name to register under |
 | `/etc/oobe.sh` always exits 0 | `default/wsl/oobe.sh` | WSL refuses to open a shell at all on a non-zero exit, leaving no way in to fix anything |
+| The desktop installed by `/etc/oobe.sh` rather than baked in | `install/wsl/all-image.sh`, `install/wsl/all-setup.sh` | Baking it in put the tarball past 5 GB gzipped, more than a GitHub release asset may be. The image carries the setup screen; the first launch downloads the rest |
+| Setup resumed from `/etc/profile.d/omarchy-wsl-setup.sh` when `provisioning/pending` survives | `install/wsl/image.sh`, `default/wsl/setup-resume.sh` | WSL runs the OOBE command exactly once, and it has to exit 0 either way, so a first run that lost the network needs some other way back |
+| Man pages, texinfo, `/usr/share/doc` and every locale but `en_US` excluded through `NoExtract` | `install/wsl/pacman-noextract.sh` | Nothing else strips them, and a later `pacman -Syu` would put them back. Applied twice, because `install/post-install/pacman.sh` restores the shipped `pacman.conf` over them |
 | The UNIX name derived from the Windows one by conservative mapping only, otherwise prompting | `default/wsl/oobe.sh` | Windows allows names `useradd` will not. Silently stripping letters would name the account something the user never chose |
-| Re-entrancy guarded on uid 1000, and the `docker` group refused at first run | `default/wsl/oobe.sh` | WSL re-runs the OOBE after some upgrades, and `docker` is root-equivalent |
+| Re-entrancy guarded on the pending marker rather than uid 1000, and the `docker` group refused at first run | `default/wsl/oobe.sh` | WSL re-runs the OOBE after some upgrades. The marker rather than the account, so a run that failed after creating it still resumes; `docker` is root-equivalent |
 | A Windows Terminal profile shipped to `/usr/lib/wsl/terminal-profile.json` | `default/wsl/terminal-profile.json`, `install/wsl/image.sh` | Windows Terminal is the front end, and `[windowsterminal] ProfileTemplate` in `wsl-distribution.conf` points at it. Written before that file, so the icon it names already exists |
 
 ### Building in a container
@@ -312,7 +328,7 @@ Added for WSL only: `librsvg` (an SVG delegate for ImageMagick, for the shortcut
 | The pacman keyring rebuilt with `pacman-key --init` and `--populate` | `bin/omarchy-dev-wsl-build` | The official Arch WSL rootfs deletes its keyring on purpose and rebuilds it in the OOBE hook this image replaces |
 | The Omarchy signing key received and locally signed by hand | `bin/omarchy-dev-wsl-build` | `omarchy-update-keyring` cannot run yet, because the `omarchy` package is not installed |
 | `omarchy` and `omarchy-settings` installed even when overlaying a checkout | `bin/omarchy-dev-wsl-build` | They ship files at fixed system paths — `/etc/skel`, systemd units, `/usr/share/uwsm/env.d` — that `OMARCHY_PATH` does not cover |
-| The dev-link `secure_path` drop-in written after `omarchy-apply-wsl` | `bin/omarchy-dev-wsl-build` | The base rootfs carries no sudo, so `visudo` does not exist until `install/wsl/packages.sh` has run |
+| The dev-link `secure_path` drop-in written after `omarchy-apply-wsl` | `bin/omarchy-dev-wsl-build` | The base rootfs carries no sudo, so `visudo` does not exist until `install/wsl/bootstrap.sh` has run |
 | `omarchy-apply-wsl` run with no `--install-user` | `bin/omarchy-apply-wsl` | The image is provisioned without an account, the way a deferred-provisioning ISO install is, because the name belongs to whoever imports it |
 | `makepkg` run as a throwaway `omarchy-build` account | `install/wsl/neatvnc.sh` | It refuses to run as root, and provisioning is root |
 
@@ -325,8 +341,8 @@ git tag "$(date -u +%Y%m.%d.0)"
 git push origin "$(date -u +%Y%m.%d.0)"
 ```
 
-Pushing one runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs the test suites and publishes the installer, a source tarball and a `SHA256SUMS`. Run it with `workflow_dispatch` and `dry_run` to build everything into a workflow artifact without publishing anything.
+Pushing one runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs the test suites, builds the image, and publishes it alongside the installer, a source tarball and a `SHA256SUMS`. Run it with `workflow_dispatch` and `dry_run` to build everything into a workflow artifact without publishing anything.
 
-The `.wsl` image is deliberately not published: it gzips to around 5 GB, and a GitHub release asset may be at most 2 GiB. It is built from a checkout instead, which is what step 2 above does.
+The image build passes `--assert-max-size 2147483648`, GitHub's limit for one release asset. If something that belongs to the setup phase starts being baked into the image, the workflow fails there rather than at the upload.
 
 The kernel is published, since it is small and takes hours to build. [`.github/workflows/wsl-kernel.yml`](.github/workflows/wsl-kernel.yml) builds it and attaches `bzImage` and `bzImage-modules.tar.gz` to a release that already exists, merging them into that release's `SHA256SUMS`. Run it by hand; it only needs rerunning when the WSL2 kernel branch moves.

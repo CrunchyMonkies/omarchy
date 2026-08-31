@@ -8,7 +8,7 @@ This is a development and evaluation target, not a supported install path. It ex
 
 ## Building
 
-This is the only way to get an image. It gzips to around 5 GB and a GitHub release asset may be at most 2 GiB, so releases carry the VKMS kernel and the Windows installer but never the image itself; `README.wsl.md` covers the whole path. `.github/workflows/wsl-kernel.yml` builds the kernel, because that takes hours and only changes when the WSL2 kernel branch moves.
+Releases carry a built image, so this is for running the code in your checkout rather than the released one. `README.wsl.md` covers the whole path. `.github/workflows/wsl-kernel.yml` builds the kernel separately, because that takes hours and only changes when the WSL2 kernel branch moves.
 
 ```bash
 omarchy dev wsl build --output ~/omarchy.wsl
@@ -24,6 +24,23 @@ The released `omarchy` and `omarchy-settings` packages are installed either way.
 
 The output is a gzip tar of the root filesystem, with the root of the archive at the root of the filesystem. Gzip is mandatory, not a preference: WSL1 unpacks images with a bsdtar that cannot read zstd, which is why Microsoft rejected zstd for the official Arch image.
 
+`--assert-max-size` fails the build when the packed image is larger than a given number of bytes. The release workflow passes 2 GiB, GitHub's limit for a single release asset, so a step that starts baking the desktop back into the image fails there rather than at the upload.
+
+### Two phases
+
+The image used to carry the whole desktop, and gzipped to around 5 GB — more than twice what a release asset may be, which is why the image was not published at all for a while. So the install is split, and `bin/omarchy-apply-wsl` selects a phase:
+
+| Phase | Runs | List | Does |
+| --- | --- | --- | --- |
+| `--image` | `omarchy dev wsl build`, in the container | `install/wsl/all-image.sh` | `NoExtract` directives, the bootstrap packages, the locale, and the metadata Windows reads at import time |
+| `--setup` | `/etc/oobe.sh`, on the machine that imported the image | `install/wsl/all-setup.sh` | Everything else: the package set, the neatvnc build, and every configuration step |
+
+With neither flag both run in order, which is what an in-place re-apply on an installed machine wants; `install/wsl/all.sh` is that pair.
+
+Every step in `install/wsl/` was already idempotent — `install/wsl/hypr.sh` and `install/wsl/groups.sh` check before appending, `install/wsl/idle.sh` and `install/wsl/services.sh` write the same thing every time — so the split needed no change to any of them, and a setup phase that fails halfway can simply be run again. That matters, because the phase runs over the network on a machine Omarchy does not control.
+
+`install/wsl/image.sh` writes `/var/lib/omarchy/provisioning/pending`, the same marker `install/provisioning/omarchy-provision-owner.service` gates on for a deferred-provisioning install on hardware, and `/etc/oobe.sh` clears it only when both the setup phase and `omarchy-provision-user` succeeded. While it is there, `/etc/profile.d/omarchy-wsl-setup.sh` offers to finish setup on the next interactive login — WSL runs the OOBE command exactly once, and it must exit 0 whatever happened, so without that a first run interrupted by a network drop would need the image re-imported.
+
 ## Importing
 
 ```powershell
@@ -36,13 +53,15 @@ Or, to control the install location:
 wsl --import Omarchy C:\wsl\omarchy C:\path\to\omarchy.wsl
 ```
 
-On first run `/etc/oobe.sh` names the account after the Windows user that launched it — `cmd.exe /c echo %USERNAME%`, case folded with spaces and dots turned into hyphens — creates it at uid 1000, and runs `omarchy-provision-user --first-install` as that user. Only that obvious mapping is automatic: a Windows name carrying apostrophes, accents or a leading digit falls back to asking, rather than silently stripping characters and creating an account nobody chose. `[oobe] defaultUid = 1000` in `/etc/wsl-distribution.conf` is what makes WSL log in as that account from then on, so `/etc/wsl.conf` deliberately carries no `[user] default` — a name pinned at build time would be wrong for everyone who picks a different one.
+On first run `/etc/oobe.sh` installs Omarchy — that is the setup phase, several gigabytes over the network — then names the account after the Windows user that launched it — `cmd.exe /c echo %USERNAME%`, case folded with spaces and dots turned into hyphens — creates it at uid 1000, and runs `omarchy-provision-user --first-install` as that user. Only that obvious mapping is automatic: a Windows name carrying apostrophes, accents or a leading digit falls back to asking, rather than silently stripping characters and creating an account nobody chose. `[oobe] defaultUid = 1000` in `/etc/wsl-distribution.conf` is what makes WSL log in as that account from then on, so `/etc/wsl.conf` deliberately carries no `[user] default` — a name pinned at build time would be wrong for everyone who picks a different one.
 
 The image ships with no password hashes in `/etc/shadow`, which Microsoft requires of a distributable image. Windows owns the authentication boundary, so there is no password for `sudo` to prompt for; `/etc/sudoers.d/omarchy-wsl` grants `%wheel` passwordless sudo to match.
 
 ## What the image contains
 
-`bin/omarchy-apply-wsl` is the WSL counterpart of `bin/omarchy-apply-system`, and `install/wsl/all.sh` is its ordered step list. It deliberately does not call `omarchy-apply-system`: five of that script's steps assume hardware WSL does not have, and there is no skip mechanism anywhere under `install/`.
+`bin/omarchy-apply-wsl` is the WSL counterpart of `bin/omarchy-apply-system`, and `install/wsl/all-image.sh` and `install/wsl/all-setup.sh` are its ordered step lists. It deliberately does not call `omarchy-apply-system`: five of that script's steps assume hardware WSL does not have, and there is no skip mechanism anywhere under `install/`.
+
+What the tarball itself contains is much less than what an installed machine does — see [Two phases](#two-phases). Everything below describes the installed result.
 
 | Skipped step | Why |
 | --- | --- |
@@ -60,9 +79,21 @@ The image ships with no password hashes in `/etc/shadow`, which Microsoft requir
 
 `install/wsl/packages.sh` subtracts `install/wsl/omarchy-wsl-skip.packages` from `install/omarchy-base.packages`. It is a skip list rather than a second manifest so a package added to the base list reaches WSL without a second edit; `test/shell.d/wsl-image-test.sh` holds every skip entry to a package that actually exists in the base list.
 
-Dropped: the display manager and boot splash, Bluetooth, printing and mDNS, the firewall, Docker, the power/backlight/DDC/Thunderbolt stack, and the kernel module and wireless regulatory helpers. The skip list carries the reasoning inline.
+Dropped: the display manager and boot splash, Bluetooth, printing and mDNS, the firewall, Docker, the power/backlight/DDC/Thunderbolt stack, the kernel module and wireless regulatory helpers, foreign-architecture emulation, `plocate` and `wireplumber` for steps and services that never run here, and `man-db` for pages `NoExtract` keeps out. The skip list carries the reasoning inline.
 
-Added for WSL only: `librsvg` (an SVG delegate for ImageMagick, so the Windows shortcut icon can be rendered from `logo.svg`), `sudo` (the base rootfs ships it, but the image depends on it), and the session's own runtime — `seatd`, `wayvnc` and `tigervnc`, all three explained under [The DRM device](#the-drm-device) and [The window](#the-window).
+Added for WSL only: `sudo` (absent from the official Arch WSL rootfs) and the session's own runtime — `seatd`, `wayvnc` and `tigervnc`, all three explained under [The DRM device](#the-drm-device) and [The window](#the-window).
+
+`install/wsl/omarchy-wsl-bootstrap.packages` is a third and much shorter list: `sudo`, `gum` and `ttfx`, all the image phase installs. Everything else arrives with the setup phase.
+
+Two steps need a toolchain for a single operation and have no use for it afterwards — `install/wsl/image.sh` renders the Windows `.ico` with ImageMagick, `install/wsl/neatvnc.sh` builds a package with `base-devel`. `install/helpers/transient-packages.sh` installs each, then removes what the install actually added, taken as the difference between two `pacman -Qq` queries rather than assumed from the names asked for, since most of the weight is dependencies. The neatvnc leaf then checks `neatvnc`, `wayvnc` and `hyprland` survived, because an over-eager prune would otherwise only show up in the session, long after the build looked fine.
+
+### Documentation and locales
+
+`install/wsl/pacman-noextract.sh` adds `NoExtract` directives to `[options]` for `usr/share/man`, `usr/share/info`, `usr/share/doc`, `usr/share/gtk-doc` and every `usr/share/locale` but `en_US`. Nothing in the install path strips those afterwards, and doing it through pacman rather than with `rm` means a later `pacman -Syu` does not put them back.
+
+`usr/share/i18n` is deliberately not on the list: `locale-gen` reads its locale definitions and charmaps from there, so excluding it would leave the image unable to generate the one locale it needs.
+
+It runs twice. The image phase writes the directives before anything is installed, and the setup phase writes them again after `install/post-install/pacman.sh`, which restores the shipped `pacman.conf` over the top of them. The script checks for its own marker first, so a third run costs nothing.
 
 ### Services
 
@@ -269,9 +300,14 @@ That needs a patched neatvnc, built by `install/wsl/neatvnc.sh`. A VNC client on
 | `bin/omarchy-launch-wsl-session` | What `start-omarchy` runs: the session, wayvnc, and the viewer |
 | `install/wsl/uwsm.sh` | Shims `uwsm-app` and `uwsm`, which need a systemd user manager |
 | `bin/omarchy-setup-wsl-viewer` | Fetches the Windows VNC viewer the desktop opens in |
-| `install/wsl/all.sh` | The ordered step list |
+| `install/wsl/all-image.sh` | The image phase's step list — what the tarball carries |
+| `install/wsl/all-setup.sh` | The setup phase's step list — what the first run installs |
 | `install/wsl/omarchy-wsl-skip.packages` | Packages subtracted from the base manifest |
+| `install/wsl/omarchy-wsl-bootstrap.packages` | The few packages the image carries before the first run |
+| `install/wsl/pacman-noextract.sh` | Keeps man pages, docs and other locales off the machine |
+| `install/helpers/transient-packages.sh` | Installs a toolchain for one step and takes it back out |
+| `default/wsl/setup-resume.sh` | `/etc/profile.d/omarchy-wsl-setup.sh` — finishes an interrupted first run |
 | `default/wsl/wsl.conf` | `/etc/wsl.conf` — systemd, interop, resolv.conf generation |
 | `default/wsl/wsl-distribution.conf` | `/etc/wsl-distribution.conf` — OOBE, shortcut, terminal profile |
-| `default/wsl/oobe.sh` | `/etc/oobe.sh` — first-run account creation |
+| `default/wsl/oobe.sh` | `/etc/oobe.sh` — the setup phase and first-run account creation |
 | `default/wsl/terminal-profile.json` | Windows Terminal profile and colour scheme |
