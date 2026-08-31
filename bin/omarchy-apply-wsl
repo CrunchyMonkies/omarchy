@@ -3,19 +3,31 @@
 # omarchy:summary=Apply Omarchy system setup inside a WSL image
 # omarchy:group=apply
 # omarchy:requires-sudo=true
-# omarchy:examples=omarchy apply wsl --first-install
+# omarchy:examples=omarchy apply wsl --first-install --image
 # omarchy:hidden=true
 
 set -euo pipefail
 
 usage() {
   cat <<USAGE
-Usage: omarchy apply wsl [--install-user USER] [--first-install|--upgrade]
+Usage: omarchy apply wsl [--image|--setup] [--install-user USER]
+                         [--first-install|--upgrade]
 
-The WSL counterpart of omarchy-apply-system. omarchy-dev-wsl-build calls this
-inside the build container once packages can be installed.
+The WSL counterpart of omarchy-apply-system, in two phases:
 
-With no --install-user it provisions the image without an account, the way a
+  --image   what the distributed .wsl tarball carries: the setup screen, the
+            locale, and the metadata Windows reads at import time.
+            omarchy-dev-wsl-build runs this in the build container.
+  --setup   the rest of Omarchy — packages, the neatvnc build, configuration.
+            /etc/oobe.sh runs this once on the user's machine.
+
+With neither, both phases run in order, which is what an in-place re-apply on
+an installed machine wants.
+
+The desktop is not in the image because baking it in put the tarball past 5 GB
+gzipped, more than a GitHub release asset may be. See docs/wsl.md.
+
+With no --install-user it provisions without an account, the way a
 deferred-provisioning ISO install does: /etc/oobe.sh creates the user on first
 run instead. That is the normal path for a distributable image, because the
 account name belongs to whoever imports it.
@@ -28,12 +40,21 @@ USAGE
 install_user="${OMARCHY_INSTALL_USER:-}"
 first_install=0
 upgrade=0
+phase=all
 
 while (($#)); do
   case "$1" in
     --install-user)
       install_user="${2:-}"
       shift 2
+      ;;
+    --image)
+      phase=image
+      shift
+      ;;
+    --setup)
+      phase=setup
+      shift
       ;;
     --first-install)
       first_install=1
@@ -83,6 +104,10 @@ export PATH="$OMARCHY_PATH/bin:$PATH"
 source "$OMARCHY_INSTALL/helpers/logging.sh"
 start_install_log
 
-source "$OMARCHY_INSTALL/wsl/all.sh"
+case "$phase" in
+  image) source "$OMARCHY_INSTALL/wsl/all-image.sh" ;;
+  setup) source "$OMARCHY_INSTALL/wsl/all-setup.sh" ;;
+  all)   source "$OMARCHY_INSTALL/wsl/all.sh" ;;
+esac
 
 stop_install_log

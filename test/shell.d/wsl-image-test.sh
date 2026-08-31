@@ -6,10 +6,16 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
 base_packages="$ROOT/install/omarchy-base.packages"
 skip_packages="$ROOT/install/wsl/omarchy-wsl-skip.packages"
+bootstrap_packages="$ROOT/install/wsl/omarchy-wsl-bootstrap.packages"
 
-read_package_list() {
-  sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -v '^$' | sort -u
-}
+source "$ROOT/install/helpers/package-list.sh"
+
+# The install runs in two phases now, and which phase a step belongs to is the
+# whole point of the split, so the checks below name the list they expect a step
+# in rather than searching both.
+image_steps="$ROOT/install/wsl/all-image.sh"
+setup_steps="$ROOT/install/wsl/all-setup.sh"
+all_steps=$(cat "$image_steps" "$setup_steps")
 
 # A skip entry that no longer names a real package is dead weight that silently
 # stops protecting anything, so hold the list to the manifest it subtracts from.
@@ -165,10 +171,10 @@ pass "the compositor does not inherit WSLg's DISPLAY"
 
 # Both leaves have to actually run during the build.
 for leaf in vscode systemd-run; do
-  grep -q "wsl/$leaf.sh" "$ROOT/install/wsl/all.sh" ||
-    fail "install/wsl/all.sh runs $leaf.sh"
+  grep -q "wsl/$leaf.sh" "$setup_steps" ||
+    fail "install/wsl/all-setup.sh runs $leaf.sh"
 done
-pass "install/wsl/all.sh runs the vscode and systemd-run leaves"
+pass "install/wsl/all-setup.sh runs the vscode and systemd-run leaves"
 
 # The viewer runs on Windows so the session can reach the Windows clipboard; an
 # X11 viewer inside WSLg bridges to Xwayland instead. The fallback has to stay,
@@ -259,8 +265,8 @@ grep -q 'install -Dm644 /dev/stdin /etc/asound.conf' "$ROOT/install/wsl/audio.sh
   fail "install/wsl/audio.sh routes ALSA somewhere"
 grep -q 'pcm.!default { type pulse }' "$ROOT/install/wsl/audio.sh" ||
   fail "install/wsl/audio.sh sends ALSA to the pulse server"
-grep -q 'wsl/audio.sh' "$ROOT/install/wsl/all.sh" ||
-  fail "install/wsl/all.sh runs audio.sh"
+grep -q 'wsl/audio.sh' "$setup_steps" ||
+  fail "install/wsl/all-setup.sh runs audio.sh"
 pass "ALSA applications are routed to WSLg's PulseAudio"
 
 # The image generates no locales at all, and WSL's /init hands the Windows
@@ -272,8 +278,8 @@ grep -q '/etc/locale.gen' "$ROOT/install/wsl/locale.sh" ||
   fail "install/wsl/locale.sh uncomments a locale in /etc/locale.gen"
 grep -q 'en_US' "$ROOT/install/wsl/locale.sh" ||
   fail "install/wsl/locale.sh names the locale it generates"
-grep -q 'wsl/locale.sh' "$ROOT/install/wsl/all.sh" ||
-  fail "install/wsl/all.sh runs locale.sh"
+grep -q 'wsl/locale.sh' "$image_steps" ||
+  fail "install/wsl/all-image.sh runs locale.sh"
 pass "the WSL image generates a locale"
 
 # Generating one cannot cover every Windows locale, so the session must not
@@ -390,9 +396,103 @@ missing=""
 while IFS= read -r leaf; do
   leaf_path="${leaf/\$OMARCHY_INSTALL/$ROOT/install}"
   [[ -f $leaf_path ]] || missing+="$leaf_path"$'\n'
-done < <(sed -nE 's|^run_logged "([^"]+)"$|\1|p' "$ROOT/install/wsl/all.sh")
-[[ -z $missing ]] || fail "install/wsl/all.sh references only files that exist" "$missing"
-pass "install/wsl/all.sh references only files that exist"
+done < <(sed -nE 's|^run_logged "([^"]+)"$|\1|p' <<<"$all_steps")
+[[ -z $missing ]] || fail "the WSL phase lists reference only files that exist" "$missing"
+pass "the WSL phase lists reference only files that exist"
+
+# all.sh is what an in-place re-apply runs, and omarchy-apply-wsl selects a
+# single phase from the same two files, so nothing may be reachable from one
+# route and not the other.
+for phase in all-image all-setup; do
+  grep -q "wsl/$phase.sh" "$ROOT/install/wsl/all.sh" ||
+    fail "install/wsl/all.sh runs both phases" "$phase"
+  grep -q "wsl/$phase.sh" "$ROOT/bin/omarchy-apply-wsl" ||
+    fail "omarchy-apply-wsl can select the $phase phase"
+done
+pass "both phases are reachable from all.sh and from omarchy-apply-wsl"
+
+# The tarball is only small because the desktop is not in it. These are the
+# steps that install or build it, and every one belongs to the setup phase.
+for heavy in packages neatvnc; do
+  grep -q "wsl/$heavy.sh" "$setup_steps" ||
+    fail "install/wsl/all-setup.sh runs $heavy.sh"
+  grep -q "wsl/$heavy.sh" "$image_steps" &&
+    fail "install/wsl/all-image.sh does not bake $heavy.sh into the tarball"
+done
+pass "the package set and the neatvnc build stay out of the image"
+
+grep -q 'omarchy-apply-wsl --first-install --image' "$ROOT/bin/omarchy-dev-wsl-build" ||
+  fail "the build runs only the image phase"
+pass "the build runs only the image phase"
+
+grep -q 'omarchy-apply-wsl --first-install --setup' "$ROOT/default/wsl/oobe.sh" ||
+  fail "oobe.sh runs the setup phase on the machine that imports the image"
+pass "oobe.sh runs the setup phase on the machine that imports the image"
+
+# Every bootstrap entry is something the setup screen cannot start without, so
+# an entry that stopped being installed anywhere else is a mistake worth
+# catching -- and each one has to come back with the full set, or an
+# omarchy-apply-wsl on an installed machine would drop it.
+for package in $(read_package_list "$bootstrap_packages"); do
+  case $package in
+    sudo) continue ;;  # a WSL-only addition in packages.sh, not the manifest
+  esac
+  grep -qx "$package" <(read_package_list "$base_packages") ||
+    fail "the bootstrap package $package is in the base manifest too"
+done
+pass "every bootstrap package is installed again by the full set"
+
+# gum draws every prompt on the setup screen and ttfx animates the logo. Lose
+# either from the image and the first run has no interface at all.
+for package in gum ttfx; do
+  grep -qx "$package" <(read_package_list "$bootstrap_packages") ||
+    fail "the image carries $package for the setup screen"
+done
+pass "the image carries the setup screen's gum and ttfx"
+
+# Applied twice on purpose: before anything is installed, and again after
+# install/post-install/pacman.sh restores the shipped pacman.conf over it.
+grep -q 'wsl/pacman-noextract.sh' "$image_steps" ||
+  fail "the image phase excludes documentation before installing anything"
+noextract_line=$(grep -n 'run_logged .*wsl/pacman-noextract.sh' "$setup_steps" | cut -d: -f1)
+pacman_line=$(grep -n 'run_logged .*post-install/pacman.sh' "$setup_steps" | cut -d: -f1)
+[[ -n $noextract_line && -n $pacman_line ]] && (( noextract_line > pacman_line )) ||
+  fail "the setup phase re-excludes documentation after post-install/pacman.sh"
+pass "the NoExtract directives survive the pacman.conf restore"
+
+# locale-gen reads its definitions from usr/share/i18n, so excluding that would
+# leave the image with no generatable locale at all.
+! grep '^NoExtract' "$ROOT/install/wsl/pacman-noextract.sh" | grep -q 'usr/share/i18n' ||
+  fail "pacman-noextract.sh leaves usr/share/i18n alone for locale-gen"
+grep -q '!usr/share/locale/en_US/\*' "$ROOT/install/wsl/pacman-noextract.sh" ||
+  fail "pacman-noextract.sh keeps the locale install/wsl/locale.sh generates"
+pass "the NoExtract locale rules keep what locale-gen and the session need"
+
+# makepkg's toolchain is the better part of a gigabyte and has no use once
+# neatvnc is built. The session is what would notice an over-eager prune, long
+# after the build looked fine, so the step checks before it finishes.
+grep -q 'omarchy_transient_packages_begin base-devel meson ninja' "$ROOT/install/wsl/neatvnc.sh" ||
+  fail "install/wsl/neatvnc.sh installs the build toolchain transiently"
+grep -q 'omarchy_transient_packages_end' "$ROOT/install/wsl/neatvnc.sh" ||
+  fail "install/wsl/neatvnc.sh removes the build toolchain again"
+grep -q 'for package in neatvnc wayvnc hyprland' "$ROOT/install/wsl/neatvnc.sh" ||
+  fail "install/wsl/neatvnc.sh checks the prune did not take the session with it"
+pass "the neatvnc build toolchain does not stay in the image"
+
+# The .ico is one file and ImageMagick is a large way to make it.
+grep -q 'omarchy_transient_packages_begin imagemagick librsvg' "$ROOT/install/wsl/image.sh" ||
+  fail "install/wsl/image.sh installs the icon renderer transiently"
+grep -q 'omarchy_transient_packages_end' "$ROOT/install/wsl/image.sh" ||
+  fail "install/wsl/image.sh removes the icon renderer again"
+pass "the icon renderer does not stay in the image"
+
+# The gate that keeps a regression from being noticed only when a release
+# upload is rejected.
+grep -q -- '--assert-max-size' "$ROOT/bin/omarchy-dev-wsl-build" ||
+  fail "omarchy-dev-wsl-build can be held to a maximum image size"
+grep -q -- '--assert-max-size' "$ROOT/.github/workflows/release.yml" ||
+  fail "the release workflow holds the image to a maximum size"
+pass "the image build is held to a size limit"
 
 # Leaves are sourced, not executed; a shebang here is a sign the file was
 # written to be run directly and will not behave the way run_logged expects.
@@ -422,6 +522,27 @@ pass "wsl-distribution.conf logs in as uid 1000"
 grep -qE '^DEFAULT_UID=1000$' "$ROOT/default/wsl/oobe.sh" ||
   fail "oobe.sh creates the account at uid 1000"
 pass "oobe.sh creates the account at uid 1000"
+
+# WSL refuses to open a shell at all when the OOBE command fails, so the user
+# would have no way in to fix whatever went wrong. The setup phase runs before
+# the account and is allowed to fail; the account is not.
+grep -qE '^exit 0$' "$ROOT/default/wsl/oobe.sh" ||
+  fail "oobe.sh always reports success to WSL"
+pass "oobe.sh always reports success to WSL"
+
+# WSL runs the OOBE command once. A setup that failed halfway has to be
+# resumable without re-importing the image, and the marker is what says it is
+# owed -- the same one omarchy-provision-owner.service gates on for hardware.
+grep -q 'install -Dm644 -o root -g root /dev/null "$provisioning_dir/pending"' \
+  "$ROOT/install/wsl/image.sh" ||
+  fail "install/wsl/image.sh marks setup as still owed"
+grep -q 'rm -f "$PROVISIONING_DIR/pending"' "$ROOT/default/wsl/oobe.sh" ||
+  fail "oobe.sh clears the marker only once setup finished"
+grep -q '/var/lib/omarchy/provisioning/pending' "$ROOT/default/wsl/setup-resume.sh" ||
+  fail "the resume hook gates on the same marker"
+grep -q '/etc/profile.d/omarchy-wsl-setup.sh' "$ROOT/install/wsl/image.sh" ||
+  fail "install/wsl/image.sh installs the resume hook where login shells find it"
+pass "a first run that fails halfway is resumed rather than re-imported"
 
 grep -qE '^command = /etc/oobe.sh$' "$distribution_conf" ||
   fail "wsl-distribution.conf runs /etc/oobe.sh on first run"

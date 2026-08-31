@@ -1,0 +1,18 @@
+# What the WSL image carries before the first run installs the rest.
+#
+# install/wsl/bootstrap.sh installs this list during the image phase; the full
+# Omarchy package set arrives later, from install/wsl/packages.sh, once the user
+# has answered the setup screen. Every entry here has to earn its place in the
+# distributed tarball, so keep it to what setup itself cannot run without.
+
+# The image ships no password hashes, so /etc/sudoers.d/omarchy-wsl grants
+# %wheel passwordless sudo -- and the official Arch WSL rootfs carries no sudo
+# at all, so install/wsl/image.sh has no visudo to validate that file with.
+sudo
+
+# The setup screen. gum draws every prompt and ttfx animates the logo, the same
+# two the first boot on hardware uses; without them the first run has no
+# interface. Both come back in the base manifest later, so this only moves when
+# they are installed, not whether.
+gum
+ttfx

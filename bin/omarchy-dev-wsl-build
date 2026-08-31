@@ -2,7 +2,7 @@
 
 # omarchy:summary=Build an importable Omarchy WSL image from this checkout
 # omarchy:group=dev
-# omarchy:args=[--output PATH] [--no-dev-link] [--base URL] [--keep-container]
+# omarchy:args=[--output PATH] [--no-dev-link] [--base URL] [--keep-container] [--assert-max-size BYTES]
 # omarchy:examples=omarchy dev wsl build --output ~/omarchy.wsl
 
 set -euo pipefail
@@ -26,6 +26,7 @@ base_url="$DEFAULT_BASE_URL"
 output=""
 dev_link=1
 keep_container=0
+max_size=0
 
 # Installing the full package set pins every core it is given for a long
 # stretch. Cap the container at half the machine so the host stays usable while
@@ -37,20 +38,27 @@ docker_memory_gb=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 / 1024 / 2 }' /pro
 
 usage() {
   cat <<USAGE
-Usage: omarchy dev wsl build [--output PATH] [--no-dev-link] [--base URL] [--keep-container]
+Usage: omarchy dev wsl build [--output PATH] [--no-dev-link] [--base URL]
+                             [--keep-container] [--assert-max-size BYTES]
 
 Builds an Omarchy WSL image from this checkout, on top of the official Arch
 Linux WSL rootfs. Writes omarchy-<date>.wsl in the current directory unless
 --output says otherwise.
 
+The image carries the first-run setup screen rather than the desktop; the rest
+of Omarchy is downloaded and installed by /etc/oobe.sh on the machine that
+imports it. That keeps the tarball small enough to publish — see docs/wsl.md.
+
 The image boots to a shell — the desktop never starts on its own. Running
 start-omarchy inside it brings up the Hyprland session in a WSLg window.
 
-  --output PATH      where to write the .wsl image
-  --no-dev-link      ship the released /usr/share/omarchy instead of overlaying
-                     this checkout at /usr/local/share/omarchy
-  --base URL         a different Arch WSL rootfs (default: $DEFAULT_BASE_URL)
-  --keep-container   leave the build container around for inspection
+  --output PATH          where to write the .wsl image
+  --no-dev-link          ship the released /usr/share/omarchy instead of
+                         overlaying this checkout at /usr/local/share/omarchy
+  --base URL             a different Arch WSL rootfs (default: $DEFAULT_BASE_URL)
+  --keep-container       leave the build container around for inspection
+  --assert-max-size N    fail if the packed image is larger than N bytes. The
+                         release workflow passes GitHub's 2 GiB asset limit
 
 The build container is capped at half this machine: $docker_cpus of $(nproc) CPUs and
 ${docker_memory_gb}G of memory.
@@ -78,6 +86,10 @@ while (($#)); do
       keep_container=1
       shift
       ;;
+    --assert-max-size)
+      max_size="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -89,6 +101,11 @@ while (($#)); do
       ;;
   esac
 done
+
+if [[ ! $max_size =~ ^[0-9]+$ ]]; then
+  echo "Error: --assert-max-size takes a number of bytes" >&2
+  exit 1
+fi
 
 if omarchy-cmd-missing docker; then
   echo "Error: docker is required to build a WSL image." >&2
@@ -226,8 +243,11 @@ else
 fi
 
 step "Applying Omarchy system setup"
+# --image only: the package set, the neatvnc build and the configuration are
+# the setup phase's, and /etc/oobe.sh runs that on the machine that imports the
+# image. Baking them in here is what put the tarball past 5 GB gzipped.
 export PATH="$OMARCHY_PATH/bin:$PATH"
-omarchy-apply-wsl --first-install
+omarchy-apply-wsl --first-install --image
 
 if [[ -f /mnt/omarchy-build/dev-link ]]; then
   step "Putting the checkout's bin on sudo's secure_path"
@@ -243,9 +263,16 @@ if [[ -f /mnt/omarchy-build/dev-link ]]; then
 fi
 
 step "Cleaning up for distribution"
-# Undo the container-only sandbox opt-out by restoring the file the repo ships,
-# so the image's pacman.conf is the one users are meant to have.
-cp -f "$SRC/default/pacman/pacman-stable.conf" /etc/pacman.conf
+# Undo the container-only sandbox opt-out. Deleting the one line rather than
+# restoring the whole file, because install/wsl/pacman-noextract.sh wrote into
+# this same [options] section and the image is meant to keep that.
+sed -i '/^DisableSandboxFilesystem$/d' /etc/pacman.conf
+
+# The base rootfs was extracted before any of that applied, so it still carries
+# what the directives now exclude.
+rm -rf /usr/share/man /usr/share/info /usr/share/doc /usr/share/gtk-doc
+find /usr/share/locale -mindepth 1 -maxdepth 1 -type d \
+  ! -name en ! -name en_US -exec rm -rf {} + 2>/dev/null || true
 
 # Microsoft's rules for a distributable image: no resolv.conf, no kernel or
 # initramfs, and no password hashes in /etc/shadow.
@@ -268,6 +295,13 @@ if grep -q '^DisableSandboxFilesystem' /etc/pacman.conf; then
   echo "Error: the container-only pacman sandbox opt-out reached the image." >&2
   exit 1
 fi
+
+if ! grep -q '^NoExtract' /etc/pacman.conf; then
+  echo "Error: the image lost the NoExtract directives and would refill on update." >&2
+  exit 1
+fi
+
+step "Installed footprint: $(du -sxh / 2>/dev/null | cut -f1)"
 
 step "Image provisioned"
 PROVISION
@@ -304,6 +338,15 @@ echo "Packing $output"
 docker export "$CONTAINER" \
   | tar --delete -f - .dockerenv etc/resolv.conf etc/hosts etc/hostname \
   | gzip --best >"$output"
+
+packed_bytes=$(stat -c %s "$output")
+
+if (( max_size > 0 && packed_bytes > max_size )); then
+  echo >&2
+  echo "Error: $output is $packed_bytes bytes, over the $max_size byte limit." >&2
+  echo "Something the setup phase should install is being baked into the image." >&2
+  exit 1
+fi
 
 echo
 echo "Built $output ($(du -h "$output" | cut -f1))"
