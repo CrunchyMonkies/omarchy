@@ -272,11 +272,21 @@ wsl --shutdown
 
 **No DRM render node may be present.** Community kernel patches exist that give `dxgkrnl` a DRM driver, and they are actively harmful here: they add a `renderD` node that Mesa has no driver for, aquamarine prefers it over the KMS fd anyway, and then every buffer import against it fails. The desktop draws, but screen capture hangs and window resizes never apply. Omarchy's kernel deliberately does not carry those patches, so `/dev/dri` holds `card0` alone. `/dev/dxg` is a separate char device and is untouched, so WSL's own GPU passthrough is unaffected. `start-omarchy --diagnose` calls out a stray `renderD*` for this reason.
 
-Rendering uses the host GPU when there is one. WSL shares it through `/dev/dxg` — a char device, not a DRM one, which is why the render-node rule above leaves it untouched — and Mesa's `d3d12` driver drives it, with the host half mounted at `/usr/lib/wsl/lib` and put on the linker path by WSL's own `/etc/ld.so.conf.d/ld.wsl.conf`.
+**The compositor renders in software; applications render on the GPU.** The split is not a preference — the compositor cannot use the GPU here, and the reason is worth recording because it is not obvious.
 
-Mesa will not find it unaided. With no DRM render node there is nothing to auto-detect from, so it falls back to llvmpipe and the driver has to be named: `gpu_render_available()` checks for `/dev/dxg`, `d3d12_dri.so`, `libd3d12core.so` and `libdxcore.so`, and the launcher sets `GALLIUM_DRIVER=d3d12` and `LIBVA_DRIVER_NAME=d3d12` when all four are there. Missing any of them — GPU support turned off, an older WSL — it sets `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe` as it always did, and `startomarchy --diagnose` names which piece is absent.
+WSL does share the host GPU, through `/dev/dxg`. That is a char device, not a DRM one, which is why the render-node rule above leaves it untouched; Mesa's `d3d12` driver drives it, and WSL mounts the host half at `/usr/lib/wsl/lib` and puts it on the linker path itself through `/etc/ld.so.conf.d/ld.wsl.conf`. Mesa will not find it unaided — with no DRM render node there is nothing to auto-detect from — so the driver has to be named, and `gpu_render_available()` checks for `/dev/dxg`, `d3d12_dri.so`, `libd3d12core.so` and `libdxcore.so` before naming it.
 
-This used to read "there is no GPU here Mesa can drive", which was true of the DRM render node that claim was tested against and never true of `/dev/dxg`. The distinction matters: the compositor allocates on VKMS and renders on the GPU, and that cross-device import is the same shape as the one that failed when a `dxgkrnl` render node was tried. `OMARCHY_WSL_SOFTWARE_RENDER=1` forces software rendering back, because a failure there only shows once the desktop is up.
+The compositor cannot be pointed at it. It allocates its buffers through GBM on the VKMS device, and a GBM device inherits whichever driver Mesa was told to use — so naming `d3d12` asks Mesa to allocate a VKMS buffer with a driver that cannot address VKMS:
+
+```
+GBM: Failed to allocate a GBM buffer: bo null
+Couldn't allocate a gbm buffer with size [1920, 1080] and format XR24
+Swapchain: Failed acquiring a buffer
+```
+
+The desktop then draws nothing at all: a viewer connects and reports zero rects. This is the same wall the `dxgkrnl` render node hit, one step earlier — there the dmabuf import failed, here the allocation does. llvmpipe allocates on VKMS because it renders into the buffer it was handed.
+
+An application has no such constraint. It renders into its own buffer and hands the compositor a finished surface, so nothing of its has to live on VKMS. `/usr/local/bin/uwsm-app` is where they are given the GPU: Omarchy launches every application through it, so the switch sits at that one chokepoint rather than at thirty call sites, and it acts on the `OMARCHY_WSL_GPU` marker the session launcher sets when the GPU is really there. Without a GPU, or with `OMARCHY_WSL_SOFTWARE_RENDER=1`, everything renders in software as it always did, and `startomarchy --diagnose` names which piece is missing.
 
 There is no Vulkan. `/usr/share/vulkan/icd.d` does not exist, so `vulkan-icd-loader` has no driver behind it. Hyprland renders with GLES, so the session does not care, but anything that asks for Vulkan will not find it.
 

@@ -49,15 +49,33 @@ grep -q 'compgen -G "/dev/dri/renderD\*"' "$launcher" ||
   fail "the render-node detector still stands, and still means DRM nodes only"
 pass "the GPU is found on /dev/dxg without disturbing the render-node rule"
 
-# Detected, not forced. Mesa cannot auto-detect with no DRM render node to probe,
-# so d3d12 has to be named -- but only when the pieces behind it are there.
-grep -q 'GALLIUM_DRIVER=d3d12' "$launcher" ||
-  fail "the launcher names the d3d12 driver, since Mesa will not find it alone"
-grep -q 'GALLIUM_DRIVER=llvmpipe' "$launcher" ||
-  fail "the launcher still falls back to software when there is no GPU"
+# The compositor renders in software and must. It allocates through GBM on
+# VKMS, and a GBM device uses whichever driver Mesa was named -- so pointing it
+# at the GPU fails allocation with "bo null" and the desktop draws zero rects.
+# This was tried; it is the reason the split exists.
+grep -q '^export GALLIUM_DRIVER=llvmpipe' "$launcher" ||
+  fail "the compositor renders in software, because it allocates on VKMS"
+grep -q '^export LIBGL_ALWAYS_SOFTWARE=1' "$launcher" ||
+  fail "the compositor renders in software, because it allocates on VKMS"
+! grep -q '^export GALLIUM_DRIVER=d3d12' "$launcher" ||
+  fail "the compositor is never pointed at the GPU, whatever the machine has"
+pass "the compositor renders in software, which is the only thing VKMS allows"
+
+# Applications are given the GPU instead, at the one point they all pass
+# through. The launcher only raises the marker; uwsm-app acts on it.
+grep -q 'OMARCHY_WSL_GPU=1' "$launcher" ||
+  fail "the launcher marks the session when the GPU is really there"
+grep -q 'OMARCHY_WSL_GPU' "$ROOT/install/wsl/uwsm.sh" ||
+  fail "uwsm-app gives applications the GPU, since every application goes through it"
+grep -q 'GALLIUM_DRIVER=d3d12' "$ROOT/install/wsl/uwsm.sh" ||
+  fail "uwsm-app names the d3d12 driver, since Mesa will not find it alone"
+grep -q 'LIBVA_DRIVER_NAME=d3d12' "$ROOT/install/wsl/uwsm.sh" ||
+  fail "applications get hardware video decode from the same driver"
+grep -q 'unset LIBGL_ALWAYS_SOFTWARE' "$ROOT/install/wsl/uwsm.sh" ||
+  fail "the compositor's software forcing does not follow applications onto the GPU"
 grep -q 'OMARCHY_WSL_SOFTWARE_RENDER' "$launcher" ||
   fail "software rendering can be forced back from outside the session"
-pass "the renderer is detected, with a fallback and a way to force it"
+pass "applications get the GPU at the one point every application passes through"
 
 # The compositor allocating on VKMS while rendering elsewhere is the import that
 # failed last time this was attempted. Linear buffers are what make it possible.
@@ -85,6 +103,23 @@ forced=$(OMARCHY_WSL_SOFTWARE_RENDER=1 bash -c "$render_fn"$'\n''render_summary'
 [[ $forced == *"forced"* ]] ||
   fail "the diagnosis says when software was asked for rather than fallen back to" "got: $forced"
 pass "the renderer diagnosis names the missing piece, and an override as an override"
+
+# The shim's own switch, run rather than read: with the marker it hands the app
+# the GPU and drops the compositor's software forcing; without it, it changes
+# nothing at all.
+shim=$(sed -n '/^install -Dm755 \/dev\/stdin \/usr\/local\/bin\/uwsm-app/,/^UWSM_APP$/p' \
+  "$ROOT/install/wsl/uwsm.sh" | sed '1d;$d' |
+  sed 's|^exec setsid.*|echo "$GALLIUM_DRIVER ${LIBVA_DRIVER_NAME:-none} ${LIBGL_ALWAYS_SOFTWARE:-unset}"|')
+
+with_gpu=$(OMARCHY_WSL_GPU=1 LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
+  bash -c "$shim" uwsm-app -- true)
+[[ $with_gpu == "d3d12 d3d12 unset" ]] ||
+  fail "uwsm-app launches applications on the GPU when the session has one" "got: $with_gpu"
+
+without=$(LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe bash -c "$shim" uwsm-app -- true)
+[[ $without == "llvmpipe none 1" ]] ||
+  fail "uwsm-app leaves software rendering alone when there is no GPU" "got: $without"
+pass "uwsm-app switches applications to the GPU only when the session marks one"
 
 # The session reaches the VKMS device through libseat, and logind has no seat to
 # offer it here. Without seatd running, start-omarchy cannot open /dev/dri/card0.

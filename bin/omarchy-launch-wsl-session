@@ -121,6 +121,9 @@ stray_render_node() {
 # be named. This checks the four things that have to be there before naming it
 # is worth doing; a machine with GPU support turned off is missing /dev/dxg and
 # renders in software as it always did.
+#
+# This governs applications only. The compositor cannot use it -- see the
+# renderer block further down for why.
 gpu_render_available() {
   [[ -e /dev/dxg ]] || return 1
   [[ -e /usr/lib/dri/d3d12_dri.so ]] || return 1
@@ -133,7 +136,7 @@ gpu_render_available() {
 # which of the four things below their machine is short of.
 render_summary() {
   if [[ ${OMARCHY_WSL_SOFTWARE_RENDER:-0} == 1 ]]; then
-    echo "llvmpipe (forced by OMARCHY_WSL_SOFTWARE_RENDER)"
+    echo "llvmpipe throughout (forced by OMARCHY_WSL_SOFTWARE_RENDER)"
     return
   fi
 
@@ -144,9 +147,9 @@ render_summary() {
   [[ -e /usr/lib/wsl/lib/libdxcore.so ]] || missing+=(libdxcore.so)
 
   if (( ${#missing[@]} )); then
-    echo "llvmpipe — no GPU (missing ${missing[*]})"
+    echo "llvmpipe throughout — no GPU (missing ${missing[*]})"
   else
-    echo "d3d12 on the host GPU through /dev/dxg"
+    echo "compositor llvmpipe, applications d3d12 on the host GPU"
   fi
 }
 
@@ -322,22 +325,29 @@ export AQ_DRM_DEVICES="$drm_device"
 # below, and a linear buffer is the one both ends can agree on.
 export AQ_NO_MODIFIERS=1
 
-# The GPU, when there is one. This used to read "there is no GPU here Mesa can
-# drive" and force llvmpipe, which was true of the DRM render node that idea was
-# tested against and never true of /dev/dxg -- see gpu_render_available.
+# The compositor renders in software, and has to. It allocates its buffers
+# through GBM on the VKMS device, and a GBM device inherits whichever driver
+# Mesa was told to use -- so pointing Mesa at d3d12 asks it to allocate a VKMS
+# buffer with a driver that cannot address VKMS:
 #
-# OMARCHY_WSL_SOFTWARE_RENDER is the way back. The compositor allocating on VKMS
-# and rendering on d3d12 is the same shape as the import that failed when this
-# was last attempted through a dxgkrnl render node, and if it fails again it
-# fails after the desktop is up, where there is nothing left to edit a file
-# with. Applications are unaffected either way.
-if [[ ${OMARCHY_WSL_SOFTWARE_RENDER:-0} == 1 ]] || ! gpu_render_available; then
-  export LIBGL_ALWAYS_SOFTWARE=1
-  export GALLIUM_DRIVER=llvmpipe
-else
-  export GALLIUM_DRIVER=d3d12
-  # The same driver decodes video, which is what mpv and Chromium reach for.
-  export LIBVA_DRIVER_NAME=d3d12
+#   GBM: Failed to allocate a GBM buffer: bo null
+#   Couldn't allocate a gbm buffer with size [1920, 1080] and format XR24
+#   Swapchain: Failed acquiring a buffer
+#
+# The desktop then draws nothing at all -- a viewer connects and reports zero
+# rects. This is the same wall a7b0da94 hit through a dxgkrnl render node,
+# one step earlier: there the import failed, here the allocation does. llvmpipe
+# allocates on VKMS because it renders into the buffer it was given.
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
+
+# Applications are a different matter. They render into their own buffers and
+# hand the compositor a finished surface, so nothing of theirs has to be
+# allocated on VKMS -- and WSL does share the host GPU, through /dev/dxg. This
+# marker is what /usr/local/bin/uwsm-app reads to launch them on it; the
+# compositor keeps the software renderer set above.
+if [[ ${OMARCHY_WSL_SOFTWARE_RENDER:-0} != 1 ]] && gpu_render_available; then
+  export OMARCHY_WSL_GPU=1
 fi
 
 export XDG_CURRENT_DESKTOP=Hyprland

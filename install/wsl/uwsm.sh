@@ -35,6 +35,22 @@ done
 
 (($#)) || exit 0
 
+# The host GPU, for applications only. The session renders in software because
+# the compositor allocates through GBM on VKMS and Mesa cannot allocate a VKMS
+# buffer with the d3d12 driver -- omarchy-launch-wsl-session carries the whole
+# story. An application has no such constraint: it renders into its own buffer
+# and hands the compositor a finished surface.
+#
+# This is the point every application passes through, which is why the switch
+# lives here rather than at thirty call sites. OMARCHY_WSL_GPU is set by the
+# session launcher only when the GPU is actually there.
+if [[ ${OMARCHY_WSL_GPU:-0} == 1 ]]; then
+  unset LIBGL_ALWAYS_SOFTWARE
+  export GALLIUM_DRIVER=d3d12
+  # The same driver decodes video, which is what mpv and Chromium reach for.
+  export LIBVA_DRIVER_NAME=d3d12
+fi
+
 # uwsm-app hands the app to a daemon and returns at once; callers rely on that,
 # and one that captures output would otherwise block for the life of the app.
 # The daemon puts the app's output in the journal, so systemd-cat does the same
