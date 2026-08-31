@@ -142,7 +142,9 @@ Every call uses `systemctl --root=/`. The build container has no systemd on the 
 start-omarchy
 ```
 
-`install/wsl/wslg.sh` installs `/usr/local/bin/start-omarchy` as a small wrapper that execs `omarchy-launch-wsl-session`. There is no X server involved despite the name — `start-omarchy` is simply where people reach for a desktop from a WSL shell. `xorg-xinit` is not installed and `/usr/local/bin` precedes `/usr/bin`, so nothing is shadowed.
+`install/wsl/wslg.sh` installs `/usr/local/bin/start-omarchy` as a small wrapper that execs `omarchy-launch-wsl-session`. No X server is involved.
+
+It was called `startx` until that name proved to be borrowed rather than free. The reasoning recorded at the time — that `xorg-xinit` is in no package list, so nothing was shadowed — checked the manifests and not the machine. `xorg-xinit` does reach a fully set-up image, as a dependency rather than through any manifest: `pacman -Q xorg-xinit` answers `1.4.4-1` and `/usr/bin/startx` exists. Since `/usr/local/bin` precedes `/usr/bin`, the shim was shadowing X11's own command the whole time. The rename fixed that as well as the name.
 
 The launcher points aquamarine at the VKMS device, unsets `WAYLAND_DISPLAY`, and starts the compositor under its own D-Bus session bus:
 
