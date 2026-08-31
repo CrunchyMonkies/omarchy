@@ -91,7 +91,8 @@ run_prompt() {
   : >"$MARKER"
   rm -f "$tmp_dir"/stdin.*
 
-  PROMPT_FN="$prompt" "$tmp_dir/driver" >"$tmp_dir/out" 2>"$tmp_dir/err" && status=0 || status=$?
+  PROMPT_FN="$prompt" OMARCHY_USERNAME_DEFAULT="${OMARCHY_USERNAME_DEFAULT:-}" \
+    "$tmp_dir/driver" >"$tmp_dir/out" 2>"$tmp_dir/err" && status=0 || status=$?
 }
 
 field() { sed -n "s/^$1=//p" "$tmp_dir/out"; }
@@ -160,6 +161,19 @@ run_prompt omarchy_prompt_username "130:"
 assert_status "$OMARCHY_FORM_SIGNAL" "username prompt reports Ctrl+C as the caller's signal"
 assert_returned "username prompt survives Ctrl+C under set -e"
 pass "username prompt propagates Esc and Ctrl+C without dying under set -e"
+
+# WSL ties the distribution to the Windows sign-in, so its first run puts that
+# name in the field rather than asking for one that is already decided. The ISO
+# has nobody to name and leaves it empty.
+run_prompt omarchy_prompt_username "0:dhh"
+grep -qE -- '--value ($|[^-])' "$GUM_ARGS" ||
+  fail "the username field is empty when nothing prefills it" "$(<"$GUM_ARGS")"
+
+OMARCHY_USERNAME_DEFAULT=jane run_prompt omarchy_prompt_username "0:jane"
+grep -q -- '--value jane' "$GUM_ARGS" ||
+  fail "OMARCHY_USERNAME_DEFAULT prefills the username field" "$(<"$GUM_ARGS")"
+[[ $(field username) == "jane" ]] || fail "a prefilled name is still what the prompt returns"
+pass "OMARCHY_USERNAME_DEFAULT prefills the username field"
 
 # Password
 

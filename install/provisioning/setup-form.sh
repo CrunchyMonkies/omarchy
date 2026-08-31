@@ -101,10 +101,13 @@ omarchy_prompt_keyboard() {
   keyboard=$(printf '%s\n' "$OMARCHY_KEYBOARD_LAYOUTS" | awk -F'|' -v c="$choice" '$1==c{print $2; exit}')
 }
 
+# OMARCHY_USERNAME_DEFAULT prefills the field. The ISO leaves it empty; the WSL
+# first run puts the Windows sign-in name there, since WSL ties the distribution
+# to that account anyway and the name is almost always the right one.
 omarchy_prompt_username() {
   local status
   while true; do
-    username=$(gum input --placeholder "Alphanumeric without spaces (like dhh)" --prompt.foreground="#845DF9" --prompt "Username> ") && status=0 || status=$?
+    username=$(gum input --value "${OMARCHY_USERNAME_DEFAULT:-}" --placeholder "Alphanumeric without spaces (like dhh)" --prompt.foreground="#845DF9" --prompt "Username> ") && status=0 || status=$?
     ((status == 0)) || return $status
 
     if [[ "$username" =~ $OMARCHY_USERNAME_PATTERN ]]; then
