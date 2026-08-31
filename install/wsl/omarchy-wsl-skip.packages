@@ -4,7 +4,9 @@
 # exist in the base list; test/shell.d/wsl-image-test.sh enforces that.
 
 # The display manager is the only thing that ever starts the compositor, and on
-# WSL the desktop must never come up on its own. start-omarchy is the way in.
+# WSL the desktop must never come up on its own. start-omarchy is the way in. Arrives
+# as a dependency of omarchy regardless; install/wsl/services.sh masks the unit,
+# which is the part that matters.
 sddm
 
 # Boot splash for a bootloader WSL does not have.
@@ -60,10 +62,6 @@ qemu-user-static-binfmt
 # here -- indexing a bind-mounted C: drive is not something to do by default --
 # so no database is ever built for locate to read.
 plocate
-
-# PipeWire's session manager. There is no systemd user manager to run pipewire
-# under, so install/wsl/audio.sh routes ALSA to WSLg's PulseAudio instead.
-wireplumber
 
 # install/wsl/pacman-noextract.sh keeps man pages out of the image, so there is
 # nothing for man-db to index or search. tldr stays.

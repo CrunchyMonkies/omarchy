@@ -294,8 +294,9 @@ One rule shapes all of it: **WSL knowledge is quarantined.** It lives in `instal
 
 | `qemu-user-static-binfmt` | Foreign-architecture emulation for a machine that runs one architecture, and the largest package in the manifest |
 | `plocate` | Both the `locate` config step and the `updatedb` run are skipped, so no database is ever built |
-| `wireplumber` | PipeWire's session manager, and there is no systemd user manager to run PipeWire under |
 | `man-db` | `install/wsl/pacman-noextract.sh` keeps the man pages out, so there is nothing to index. `tldr` stays |
+
+Subtracting a name only declines to ask for it. `sddm`, `plymouth`, `avahi` and `wireplumber` arrive anyway, because the `omarchy` and `omarchy-settings` packages depend on them and the image cannot skip those two — they ship the files at fixed system paths that `OMARCHY_PATH` does not cover. That is why `install/wsl/services.sh` masks `sddm.service`: the mask, not the skip list, is what keeps the desktop from starting on its own.
 
 Added for WSL only: `sudo` (absent from the Arch WSL rootfs), `seatd`, `wayvnc`, `tigervnc` and `alsa-plugins`.
 

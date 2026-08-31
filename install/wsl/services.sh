@@ -14,9 +14,11 @@ systemctl --root=/ set-default multi-user.target
 # so seatd has to be the backend here.
 systemctl --root=/ enable seatd.service
 
-# The sddm package is not installed here, but mask the unit anyway: it is the
-# only thing that ever starts the compositor, and a later pacman -S must not be
-# able to bring the desktop up at boot behind the user's back.
+# This is the only thing keeping the desktop from starting on its own. The sddm
+# package is on install/wsl/omarchy-wsl-skip.packages, but the skip list can
+# only decline to name a package, and the omarchy package depends on sddm -- so
+# it is installed here whatever the list says. Masking the unit is what actually
+# stops it, and it also covers a later pacman -S.
 systemctl --root=/ mask sddm.service
 
 # Units Microsoft documents as breaking WSL distributions. NetworkManager and

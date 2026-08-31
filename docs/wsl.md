@@ -79,7 +79,9 @@ What the tarball itself contains is much less than what an installed machine doe
 
 `install/wsl/packages.sh` subtracts `install/wsl/omarchy-wsl-skip.packages` from `install/omarchy-base.packages`. It is a skip list rather than a second manifest so a package added to the base list reaches WSL without a second edit; `test/shell.d/wsl-image-test.sh` holds every skip entry to a package that actually exists in the base list.
 
-Dropped: the display manager and boot splash, Bluetooth, printing and mDNS, the firewall, Docker, the power/backlight/DDC/Thunderbolt stack, the kernel module and wireless regulatory helpers, foreign-architecture emulation, `plocate` and `wireplumber` for steps and services that never run here, and `man-db` for pages `NoExtract` keeps out. The skip list carries the reasoning inline.
+Dropped: the display manager and boot splash, Bluetooth, printing and mDNS, the firewall, Docker, the power/backlight/DDC/Thunderbolt stack, the kernel module and wireless regulatory helpers, foreign-architecture emulation, `plocate` for an index nothing builds, and `man-db` for pages `NoExtract` keeps out. The skip list carries the reasoning inline.
+
+Not everything on it actually goes. Subtracting a name only declines to ask for it, and `sddm`, `plymouth`, `avahi` and `wireplumber` are dependencies of `omarchy` and `omarchy-settings`, which the image installs whatever else it skips — they ship the files at fixed system paths `OMARCHY_PATH` does not cover. The entries stay because the reasoning still holds and a package that drops the dependency should take effect at once, but they are not what protects anything. For `sddm` that protection is the mask in `install/wsl/services.sh`.
 
 Added for WSL only: `sudo` (absent from the official Arch WSL rootfs) and the session's own runtime — `seatd`, `wayvnc` and `tigervnc`, all three explained under [The DRM device](#the-drm-device) and [The window](#the-window).
 
