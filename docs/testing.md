@@ -90,6 +90,28 @@ Gate only what needs gating — put `require_compositor` in files whose runtime
 half needs a live session, and keep static analysis of the same area in code
 that runs unconditionally before or beside it.
 
+## Tests that read a sibling checkout
+
+A few assertions measure this repository against one beside it: `omarchy-pkgs`
+for what the PKGBUILDs install, `omarchy-iso` for what the installer does.
+Neither is published, so no clean machine has them and CI never will.
+
+They follow the same rule as the compositor — **a skip is a passing test**. When
+the checkout is absent the file prints `ok - no omarchy-pkgs checkout; skipping
+...` and carries on, rather than failing for a reason that says nothing about
+the commit. `OMARCHY_PKGS_PATH` and `OMARCHY_ISO_PATH` point at the checkouts
+when you have them; the search paths are in the tests themselves.
+
+Gate only the block that needs the checkout. `config-test.sh` is the cautionary
+case: it once aborted the whole file at its PKGBUILD check, taking 24 unrelated
+assertions with it — the entire `omarchy-bar` CLI surface, the Hyprland
+bootstrap and the clock migration, none of which read the sibling repo at all.
+
+A skip must not turn into a false pass. Where the check is inside a `python3`
+heredoc, exit a distinct code (66) and let the shell decide, so the skip and the
+file's closing `pass` cannot both fire. A checkout that is present but wrong
+still fails loudly.
+
 ## Unit-testing shell JavaScript from bash
 
 The Quickshell plugins keep their logic in plain `.js` modules
