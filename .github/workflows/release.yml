@@ -1,12 +1,14 @@
 name: Release
 
-# Publishes a tagged Omarchy WSL release: the Windows installer, a source
-# tarball, and a checksums file covering them.
+# Publishes a tagged Omarchy WSL release: the .wsl image, the Windows installer,
+# a source tarball, and a checksums file covering them.
 #
-# The .wsl image is deliberately not here. It gzips to around 5 GB, which is
-# well past GitHub's 2 GiB limit for a single release asset, so it is built
-# from a checkout with `omarchy dev wsl build` instead. README.wsl.md is the
-# procedure.
+# The image is a bootstrap: it carries the first-run setup screen, and
+# /etc/oobe.sh downloads and installs the rest of Omarchy on the machine that
+# imports it. That is what brings it under GitHub's 2 GiB limit for a single
+# release asset -- baking the desktop in put it past 5 GB gzipped. The build
+# asserts the limit rather than trusting it, so a regression fails here instead
+# of at the upload.
 #
 # Tags are calendar versions, YYYYMM.DD.N -- cut one with
 #   git tag "$(date -u +%Y%m.%d.0)"
@@ -68,9 +70,51 @@ jobs:
           chown -R tester:tester "$GITHUB_WORKSPACE"
           runuser -u tester -- env HOME=/home/tester ./test/all
 
+  image:
+    name: Image
+    needs: test
+    runs-on: ubuntu-latest
+    # Installing a keyring, the runtime and the bootstrap set over a mirror,
+    # inside a container capped at half the runner. Generous, because a timeout
+    # here wastes the whole run.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make room for the build
+        # Same recipe as .github/workflows/wsl-kernel.yml: the runner's root
+        # filesystem is too small for a Docker image plus the packed tarball,
+        # and /mnt is not.
+        run: |
+          sudo systemctl stop docker.service docker.socket
+          sudo rm -rf /var/lib/docker
+          sudo mkdir -p /mnt/docker
+          printf '{ "data-root": "/mnt/docker" }\n' | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl start docker.service
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          df -h / /mnt
+
+      - name: Build the WSL image
+        # --no-dev-link: a release ships the packaged runtime at
+        # /usr/share/omarchy, not a copy of the checkout overlaid on top of it.
+        # --assert-max-size: 2 GiB, GitHub's limit for one release asset.
+        run: |
+          mkdir -p dist
+          ./bin/omarchy-dev-wsl-build \
+            --no-dev-link \
+            --output "dist/omarchy.wsl" \
+            --assert-max-size 2147483648
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omarchy-wsl-image
+          path: dist/omarchy.wsl
+          retention-days: 1
+
   release:
     name: Release
-    needs: test
+    needs: [test, image]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -153,6 +197,18 @@ jobs:
       - name: Stage the Windows installer
         run: cp install/wsl/windows/Install-Omarchy.ps1 dist/
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: omarchy-wsl-image
+          path: ${{ runner.temp }}/image
+
+      - name: Stage the WSL image
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        # Named for the tag here rather than in the image job, which has no tag
+        # of its own to read.
+        run: mv "$RUNNER_TEMP/image/omarchy.wsl" "dist/omarchy-$TAG.wsl"
+
       - name: Checksum every asset
         run: |
           cd dist
@@ -170,42 +226,36 @@ jobs:
         id: notes
         env:
           VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           notes="$RUNNER_TEMP/notes.md"
 
           cat >"$notes" <<NOTES
           Omarchy $VERSION for WSL, from \`$GITHUB_SHA\`.
 
-          ## The image is built locally
-
-          The \`.wsl\` image is not published here. It gzips to well over GitHub's 2 GiB
-          limit for a release asset, so it is built from a checkout instead:
-
-          \`\`\`bash
-          omarchy dev wsl build --output ~/omarchy.wsl
-          \`\`\`
-
-          \`README.wsl.md\` covers that end to end, including the Windows side.
-
           ## What is here
 
+          - \`omarchy-$TAG.wsl\` -- the image. It carries the first-run setup screen rather
+            than the whole desktop: the first launch asks a few questions and then downloads
+            and installs the rest, which takes a while and needs a network connection.
           - \`bzImage\` and \`bzImage-modules.tar.gz\` -- the VKMS kernel \`start-omarchy\` needs, because
             stock WSL2 kernels expose no DRM device. It takes hours to build, which is why it
             is published rather than left to you. Attached separately; if it is not here yet,
             it is still building.
           - \`Install-Omarchy.ps1\` -- installs the kernel, edits \`.wslconfig\`, imports the
-            image you built and unpacks the modules.
+            image and unpacks the modules.
           - the source tarball and \`SHA256SUMS\`.
 
           ## Install
 
-          From PowerShell on Windows, with the image you built:
+          From PowerShell on Windows:
 
           \`\`\`powershell
-          .\\Install-Omarchy.ps1 -ImagePath C:\\path\\to\\omarchy.wsl
+          .\\Install-Omarchy.ps1
           \`\`\`
 
-          It fetches this release's kernel unless you pass \`-KernelPath\` or \`-SkipKernel\`.
+          It fetches this release's image and kernel unless you pass \`-ImagePath\`,
+          \`-KernelPath\` or \`-SkipKernel\`.
 
           ## Verify
 

@@ -6,10 +6,12 @@
   Installs the VKMS kernel the desktop needs, imports an Omarchy .wsl image, and
   unpacks the kernel modules.
 
-  The image is built locally -- 'omarchy dev wsl build' -- and passed with
-  -ImagePath. It gzips to around 5 GB, well past GitHub's limit for a release
-  asset, so it is not published. The kernel is: it takes hours to build, so this
-  fetches it from a release unless you point at your own.
+  Both the image and the kernel are fetched from a release and verified against
+  its SHA256SUMS, unless you point at your own with -ImagePath or -KernelPath.
+
+  The image is a bootstrap: it carries Omarchy's first-run setup screen, and the
+  first launch asks a few questions and then downloads and installs the rest.
+  That needs a network connection and takes a while.
 
   This is the one part of the WSL setup that cannot live inside the image: it
   runs on Windows, before any Omarchy distribution exists. See README.wsl.md for
@@ -18,8 +20,8 @@
   Nothing here needs administrator rights, and none are requested.
 
 .PARAMETER Tag
-  The release to take the kernel from, for example 202608.31.0. Defaults to the
-  latest.
+  The release to take the image and kernel from, for example 202608.31.0.
+  Defaults to the latest.
 
 .PARAMETER Name
   The name to register the distribution under. Defaults to Omarchy.
@@ -28,8 +30,8 @@
   Where to store the distribution. Defaults to %USERPROFILE%\WSL\Omarchy.
 
 .PARAMETER ImagePath
-  The .wsl image to import, as produced by 'omarchy dev wsl build'. Required:
-  there is no published image to fall back on.
+  Import a locally built .wsl image, as produced by 'omarchy dev wsl build',
+  instead of fetching the release's.
 
 .PARAMETER KernelPath
   Install a locally built bzImage instead of fetching the release's. Its modules
@@ -45,13 +47,13 @@
   kernel= line in .wslconfig.
 
 .EXAMPLE
-  .\Install-Omarchy.ps1 -ImagePath ~\omarchy.wsl
+  .\Install-Omarchy.ps1
 
 .EXAMPLE
   .\Install-Omarchy.ps1 -ImagePath ~\omarchy.wsl -KernelPath ~\bzImage
 
 .EXAMPLE
-  .\Install-Omarchy.ps1 -ImagePath ~\omarchy.wsl -Name Omarchy-test -Force
+  .\Install-Omarchy.ps1 -Name Omarchy-test -Force
 #>
 
 [CmdletBinding()]
@@ -176,8 +178,16 @@ Install or update it with:
 
 # ------------------------------------------------------------------ download
 
+$script:ReleaseCache = @{}
+
 function Get-Release {
   param([string] $Tag)
+
+  # Both the image and the kernel come from the same release, and each asks for
+  # it. GitHub rate-limits unauthenticated API calls tightly enough to care.
+  if ($script:ReleaseCache.ContainsKey($Tag)) {
+    return $script:ReleaseCache[$Tag]
+  }
 
   if ($Tag -eq 'latest') {
     $url = "https://api.github.com/repos/$Repo/releases/latest"
@@ -189,10 +199,16 @@ function Get-Release {
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
   try {
-    return Invoke-RestMethod -Uri $url -Headers @{
+    $release = Invoke-RestMethod -Uri $url -Headers @{
       'Accept'     = 'application/vnd.github+json'
       'User-Agent' = 'Install-Omarchy'
     }
+
+    Write-Step "Resolving the $Tag release"
+    Write-Note "$($release.tag_name), published $($release.published_at)"
+
+    $script:ReleaseCache[$Tag] = $release
+    return $release
   } catch {
     Stop-WithError "Could not read the release from $url`n$($_.Exception.Message)"
   }
@@ -206,6 +222,12 @@ function Save-Asset {
 
   $path = Join-Path $Directory $Asset.name
   $size = [math]::Round($Asset.size / 1MB, 1)
+
+  # The image and the kernel are verified against the same SHA256SUMS, and the
+  # second caller has no reason to fetch it again.
+  if (Test-Path $path) {
+    return $path
+  }
 
   Write-Note "$($Asset.name) ($size MB)"
 
@@ -267,16 +289,48 @@ function Read-Sha256Sums {
   return $sums
 }
 
+function Get-ReleaseImage {
+  param(
+    [string] $Tag,
+    [string] $Directory
+  )
+
+  $release = Get-Release -Tag $Tag
+
+  $assets = @{}
+  foreach ($asset in $release.assets) { $assets[$asset.name] = $asset }
+
+  # The image is named for the tag, and a manual -Tag may not be the tag the
+  # release ended up with, so match on the shape rather than composing a name.
+  $image = $assets.Values | Where-Object { $_.name -like 'omarchy-*.wsl' } | Select-Object -First 1
+
+  if (-not $image) {
+    Stop-WithError "The $($release.tag_name) release carries no .wsl image. Build one with 'omarchy dev wsl build' and pass -ImagePath."
+  }
+
+  if (-not $assets.ContainsKey('SHA256SUMS')) {
+    Stop-WithError "The $($release.tag_name) release carries no SHA256SUMS, so nothing can be verified."
+  }
+
+  Write-Step 'Downloading the image'
+  Write-Note 'A gigabyte or two. The rest of Omarchy is downloaded by the first launch, not here.'
+
+  $sumsPath = Save-Asset -Asset $assets['SHA256SUMS'] -Directory $Directory
+  $sums = Read-Sha256Sums -Path $sumsPath
+
+  $path = Save-Asset -Asset $image -Directory $Directory
+  Assert-Checksum -Path $path -Sums $sums
+
+  return $path
+}
+
 function Get-ReleaseKernel {
   param(
     [string] $Tag,
     [string] $Directory
   )
 
-  Write-Step "Resolving the $Tag release"
-
   $release = Get-Release -Tag $Tag
-  Write-Note "$($release.tag_name), published $($release.published_at)"
 
   $assets = @{}
   foreach ($asset in $release.assets) { $assets[$asset.name] = $asset }
@@ -495,24 +549,7 @@ function Install-Modules {
 Write-Host ''
 Write-Host 'Omarchy for WSL' -ForegroundColor Cyan
 
-if (-not $ImagePath) {
-  Stop-WithError @'
--ImagePath is required.
-
-The .wsl image is not published -- it gzips to around 5 GB, past what a GitHub
-release asset may be -- so build it from a checkout first:
-
-  omarchy dev wsl build --output ~/omarchy.wsl
-
-then point this at it:
-
-  .\Install-Omarchy.ps1 -ImagePath C:\path\to\omarchy.wsl
-
-README.wsl.md covers the whole procedure.
-'@
-}
-
-if (-not (Test-Path $ImagePath)) {
+if ($ImagePath -and -not (Test-Path $ImagePath)) {
   Stop-WithError "No such image: $ImagePath"
 }
 
@@ -522,13 +559,16 @@ $workspace = Join-Path ([System.IO.Path]::GetTempPath()) "omarchy-install-$PID"
 New-Item -ItemType Directory -Path $workspace -Force | Out-Null
 
 try {
-  # The image is built, never downloaded: it gzips to around 5 GB, past what a
-  # release asset may be. Taken on trust, because there is nothing published to
-  # check it against -- you built it.
-  Write-Step 'Using the image you built'
+  if ($ImagePath) {
+    # Taken on trust: there is nothing published to check a local build
+    # against, and you built it.
+    Write-Step 'Using the image you built'
 
-  $image = (Resolve-Path -Path $ImagePath).Path
-  Write-Note $image
+    $image = (Resolve-Path -Path $ImagePath).Path
+    Write-Note $image
+  } else {
+    $image = Get-ReleaseImage -Tag $Tag -Directory $workspace
+  }
 
   $kernel = $null
   $modules = $null
