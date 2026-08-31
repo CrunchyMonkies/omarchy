@@ -123,7 +123,7 @@ cat <<'NOTE'
 
 Omarchy is ready.
 
-The desktop does not start on its own here. Run `startx` to bring up the
+The desktop does not start on its own here. Run `start-omarchy` to bring up the
 Hyprland session in a WSLg window, or just use the CLI from this shell.
 
 NOTE

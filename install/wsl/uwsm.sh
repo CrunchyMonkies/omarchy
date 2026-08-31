@@ -5,9 +5,9 @@
 # (docs/wsl.md explains why), so without these the desktop starts and then
 # cannot launch anything.
 #
-# Shimmed rather than guarded at each call site, the same way startx is: WSL
-# knowledge stays in install/wsl, and /usr/local/bin precedes /usr/bin so the
-# real uwsm is shadowed without being removed.
+# Shimmed rather than guarded at each call site, the same way start-omarchy
+# is: WSL knowledge stays in install/wsl, and /usr/local/bin precedes
+# /usr/bin so the real uwsm is shadowed without being removed.
 
 install -Dm755 /dev/stdin /usr/local/bin/uwsm-app <<'UWSM_APP'
 #!/bin/bash

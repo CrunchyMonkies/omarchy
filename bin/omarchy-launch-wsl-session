@@ -3,13 +3,14 @@
 # omarchy:summary=Start the Omarchy desktop in a WSLg window
 # omarchy:group=launch
 # omarchy:args=[--diagnose]
-# omarchy:examples=startx
+# omarchy:examples=start-omarchy
 # omarchy:hidden=true
 
 set -uo pipefail
 
-# This is what `startx` runs on a WSL image (install/wsl/wslg.sh installs the
-# shim). WSL never starts the desktop on its own, so this is the only way in.
+# This is what `start-omarchy` runs on a WSL image (install/wsl/wslg.sh
+# installs the shim). WSL never starts the desktop on its own, so this is the
+# only way in.
 #
 # The session is not shown the way it is on hardware. WSL has no display to
 # scan out to and no GPU Mesa can drive, so Hyprland renders in software onto a
@@ -24,12 +25,11 @@ HEADLESS_OUTPUT=HEADLESS-1
 
 usage() {
   cat <<USAGE
-Usage: startx [--diagnose]
+Usage: start-omarchy [--diagnose]
        omarchy launch wsl session [--diagnose]
 
 Starts the Omarchy Hyprland session as a window on the Windows desktop,
-through WSLg. There is no X server involved despite the name — startx is
-just where people reach for a desktop from a WSL shell.
+through WSLg.
 
 Closing the window ends the session.
 
@@ -186,7 +186,7 @@ seatd is not running, so Hyprland cannot open the DRM device.
   sudo systemctl enable --now seatd
 NOTE
   else
-    echo "Everything the session needs is present. Run startx."
+    echo "Everything the session needs is present. Run start-omarchy."
   fi
 
   # Reported after the chain above rather than inside it: no sound is a bad
@@ -219,7 +219,7 @@ fi
 
 if ! wslg_present; then
   echo "Error: /mnt/wslg not found — this is not a WSLg-capable WSL distribution." >&2
-  echo "Run 'startx --diagnose' for details." >&2
+  echo "Run 'start-omarchy --diagnose' for details." >&2
   exit 1
 fi
 
@@ -241,7 +241,7 @@ fi
 # is no uwsm here (see below), which makes this command the top level -- hence
 # reading env-bootstrap directly rather than relying on $OMARCHY_PATH the way
 # ordinary bin/ commands may. A login shell already has it from
-# /etc/profile.d/omarchy.sh; "wsl -d Omarchy startx" is not a login shell.
+# /etc/profile.d/omarchy.sh; "wsl -d Omarchy start-omarchy" is not a login shell.
 if [[ -z ${OMARCHY_PATH:-} ]]; then
   source /usr/share/omarchy/default/bash/env-bootstrap
 fi
@@ -356,7 +356,7 @@ cleanup() {
     # syntax error under it, returns 7, and leaves the session running.
     hyprctl dispatch 'hl.dsp.exit()' >/dev/null 2>&1
 
-    # Don't let a session that ignores that strand startx in wait forever.
+    # Don't let a session that ignores that strand start-omarchy in wait forever.
     wait_until 10 session_gone || kill "$session_pid" 2>/dev/null
     wait "$session_pid" 2>/dev/null
   fi
@@ -399,7 +399,7 @@ session_pid=$!
 
 if ! wait_until 60 session_ready; then
   echo "Error: the Hyprland session did not come up." >&2
-  echo "Run 'startx --diagnose', and see 'omarchy debug' for the session log." >&2
+  echo "Run 'start-omarchy --diagnose', and see 'omarchy debug' for the session log." >&2
   exit 1
 fi
 

@@ -19,9 +19,10 @@ fi
 if ! grep -q 'output = "Virtual-1"' "$skel_monitors"; then
   cat >>"$skel_monitors" <<'MONITOR'
 
--- WSL: the desktop you see is a headless output that startx creates and wayvnc
--- resizes with the window. Virtual-1 is the VKMS device backing it, and having
--- it on as well would put a second, fixed-size monitor beside the real one.
+-- WSL: the desktop you see is a headless output that start-omarchy creates
+-- and wayvnc resizes with the window. Virtual-1 is the VKMS device backing
+-- it, and having it on as well would put a second, fixed-size monitor beside
+-- the real one.
 hl.monitor({ output = "Virtual-1", disabled = true })
 MONITOR
 fi

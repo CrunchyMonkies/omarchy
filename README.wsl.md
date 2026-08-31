@@ -2,7 +2,7 @@
 
 Omarchy builds into an importable WSL image. The CLI, themes and configuration all work the way they do on hardware, and the full Hyprland desktop runs in a window on the Windows desktop.
 
-The desktop never starts on its own. `startx` is the only way in.
+The desktop never starts on its own. `start-omarchy` is the only way in.
 
 For how any of this works — the DRM device, the session model, the VNC path — see [`docs/wsl.md`](docs/wsl.md). This file is the order to do things in.
 
@@ -20,7 +20,7 @@ Then from PowerShell on Windows, pointing at what you just built:
 .\Install-Omarchy.ps1 -ImagePath C:\path\to\omarchy.wsl
 ```
 
-That fetches the kernel from the latest release, sets up `.wslconfig`, imports the image and unpacks the modules. Then `omarchy setup wsl viewer` and `startx` inside the distribution.
+That fetches the kernel from the latest release, sets up `.wslconfig`, imports the image and unpacks the modules. Then `omarchy setup wsl viewer` and `start-omarchy` inside the distribution.
 
 The rest of this file is that in full, plus what to do when a piece of it does not work.
 
@@ -34,7 +34,7 @@ Nothing on the Windows side needs administrator rights.
 
 ## 1. Get the kernel
 
-Stock WSL2 kernels expose Microsoft's `/dev/dxg` and no DRM device at all, so Hyprland has nothing to render on. Everything except the desktop works on a stock kernel; `startx` does not.
+Stock WSL2 kernels expose Microsoft's `/dev/dxg` and no DRM device at all, so Hyprland has nothing to render on. Everything except the desktop works on a stock kernel; `start-omarchy` does not.
 
 **From a release** — `bzImage` and `bzImage-modules.tar.gz` are attached to every [release](https://github.com/CrunchyMonkies/omarchy/releases), and `Install-Omarchy.ps1` fetches them for you. Nothing to do here.
 
@@ -76,7 +76,7 @@ irm https://github.com/CrunchyMonkies/omarchy/releases/latest/download/Install-O
 | `-Tag 202608.31.0` | take the kernel from a specific release instead of the latest |
 | `-Name` | the name to register the distribution under (default `Omarchy`) |
 | `-Location` | where the distribution is stored (default `%USERPROFILE%\WSL\Omarchy`) |
-| `-SkipKernel` | import the image only — the CLI works, `startx` does not |
+| `-SkipKernel` | import the image only — the CLI works, `start-omarchy` does not |
 | `-Force` | replace an existing distribution, or an existing `kernel=` line |
 
 It verifies the kernel against the release's `SHA256SUMS` and stops before installing anything if that fails. The image is taken on trust, because you built it.
@@ -133,6 +133,8 @@ TurboVNC is the one the desktop uses, because it is the only one that grabs the 
 
 This is the one step the image cannot do for you: it runs in a build container with no Windows to write to.
 
+Re-run it after upgrading an existing distribution: the shortcut records the command it starts, and the entry point was renamed from `startx` to `start-omarchy`.
+
 Without it the desktop still opens, in the viewer inside WSL. That one cannot reach the Windows clipboard and never receives `SUPER`.
 
 ## 5. Start the desktop
@@ -140,7 +142,7 @@ Without it the desktop still opens, in the viewer inside WSL. That one cannot re
 Double-click **Omarchy Desktop**, or run:
 
 ```bash
-startx
+start-omarchy
 ```
 
 Closing the window ends the session.
@@ -153,14 +155,14 @@ Closing the window ends the session.
 ## When something is wrong
 
 ```bash
-startx --diagnose
+start-omarchy --diagnose
 ```
 
 It reports what the session needs and what this machine has, without starting anything, and names the fix for whichever piece is missing.
 
 ## How this differs from Omarchy on hardware
 
-- **No systemd user session.** `user@1000.service` cannot start under WSL — its cgroup is held populated by processes WSL keeps in another PID namespace, so systemd's `clone3(CLONE_INTO_CGROUP)` fails with `EBUSY` forever, on a stock Arch WSL distribution too. `startx` is therefore the session leader instead of uwsm, and `uwsm-app` is shimmed so applications still launch. One consequence: the six user units under `default/systemd/user/` never start, and first-run provisioning reports that step as failed. All six are optional or hardware-shaped.
+- **No systemd user session.** `user@1000.service` cannot start under WSL — its cgroup is held populated by processes WSL keeps in another PID namespace, so systemd's `clone3(CLONE_INTO_CGROUP)` fails with `EBUSY` forever, on a stock Arch WSL distribution too. `start-omarchy` is therefore the session leader instead of uwsm, and `uwsm-app` is shimmed so applications still launch. One consequence: the six user units under `default/systemd/user/` never start, and first-run provisioning reports that step as failed. All six are optional or hardware-shaped.
 - **No idle lock.** A distributable WSL image carries no password hashes, so a lock screen could never be answered. Idle is disabled in the image. `omarchy toggle idle` turns it back on, and here that is a way to lock yourself out.
 - **No display manager, Bluetooth, printing, firewall, or power management.** The image drops them; the skip list carries the reasoning inline.
 - **Software rendering.** There is no GPU here Mesa can drive.
@@ -189,7 +191,7 @@ One rule shapes all of it: **WSL knowledge is quarantined.** It lives in `instal
 | `LIBGL_ALWAYS_SOFTWARE=1`, `GALLIUM_DRIVER=llvmpipe` | `bin/omarchy-launch-wsl-session` | There is no GPU Mesa can drive; without being told so EGL dies with `DRI2: failed to load driver` |
 | `seatd` installed and enabled in place of logind | `install/wsl/packages.sh`, `install/wsl/services.sh` | Hyprland reaches the device through libseat. logind manages seats it finds on a real machine, and WSL has none |
 | `seat`, `video` and `render` recorded for the deferred first-boot account | `install/wsl/groups.sh` | The image creates its user at first boot, so the groups have to be recorded rather than granted |
-| `startx --diagnose` | `bin/omarchy-launch-wsl-session` | On a stock kernel everything *except* the session works, so the failure needs explaining rather than reporting |
+| `start-omarchy --diagnose` | `bin/omarchy-launch-wsl-session` | On a stock kernel everything *except* the session works, so the failure needs explaining rather than reporting |
 
 ### Session and systemd
 
@@ -197,13 +199,13 @@ One rule shapes all of it: **WSL knowledge is quarantined.** It lives in `instal
 
 | Fix | Where | Why |
 | --- | --- | --- |
-| `startx` shimmed into `/usr/local/bin` to run `omarchy-launch-wsl-session` | `install/wsl/wslg.sh` | `startx` is what people reach for, there is no X server to start, and uwsm cannot be the session leader |
+| `start-omarchy` shimmed into `/usr/local/bin` to run `omarchy-launch-wsl-session` | `install/wsl/wslg.sh` | The desktop never starts on its own, so the image has to give users an entry point, and uwsm cannot be the session leader |
 | `uwsm-app` shimmed to run the command under `setsid --fork` | `install/wsl/uwsm.sh` | Omarchy launches everything through `uwsm-app`, which asks `wayland-wm-app-daemon.service` for a scope. Without the shim the desktop starts and can launch nothing |
 | `uwsm stop` translated to `hyprctl dispatch 'hl.dsp.exit()'` | `install/wsl/uwsm.sh` | The Lua config wants the dispatcher form; plain `hyprctl dispatch exit` is a syntax error under it, returns 7, and leaves the session running |
 | `systemd-run --user` shimmed, `--user` only | `install/wsl/systemd-run.sh` | Five commands schedule through it and fail before starting anything. `omarchy-launch-browser` passes `StandardError=null`, so the browser simply never appeared. The system manager works and must not be intercepted |
 | `--on-active` spans translated to a `sleep`, not discarded | `install/wsl/systemd-run.sh` | Three of the five callers are timers. Collapsing them would reboot the machine out from under the command that asked and fire every reminder at once |
 | Compositor started as `env -u DISPLAY XDG_SESSION_TYPE=wayland dbus-run-session -- start-hyprland` | `bin/omarchy-launch-wsl-session` | `dbus-run-session` replaces the user manager's `dbus.socket`; `start-hyprland` is Hyprland's own watchdog launcher |
-| Session environment sourced by the launcher | `bin/omarchy-launch-wsl-session` | uwsm reads `/usr/share/uwsm/env.d/10-omarchy`, which is where `OMARCHY_PATH`, `TERMINAL` and `EDITOR` come from. `wsl -d Omarchy startx` is not a login shell |
+| Session environment sourced by the launcher | `bin/omarchy-launch-wsl-session` | uwsm reads `/usr/share/uwsm/env.d/10-omarchy`, which is where `OMARCHY_PATH`, `TERMINAL` and `EDITOR` come from. `wsl -d Omarchy start-omarchy` is not a login shell |
 | `dbus-update-activation-environment` run without `--systemd` | `bin/omarchy-launch-wsl-session` | `autostart.lua` runs it with `--systemd`, which fails here — and then the portal backends activate with no `WAYLAND_DISPLAY` and cannot reach the compositor |
 | Compositor socket found by diffing `wayland-N` before and after start | `bin/omarchy-launch-wsl-session` | `autostart.lua` publishes it into the user manager, and wayvnc needs it. WSLg's own `wayland-0` is already there |
 | `HYPRLAND_INSTANCE_SIGNATURE` recovered from the newest `$XDG_RUNTIME_DIR/hypr/*` | `bin/omarchy-launch-wsl-session` | Only the compositor and its children have it, and this command is its parent |
@@ -239,7 +241,7 @@ One rule shapes all of it: **WSL knowledge is quarantined.** It lives in `instal
 | TurboVNC, TigerVNC and innoextract pinned by version and SHA256 | `bin/omarchy-setup-wsl-viewer` | Neither publisher signs the download, so pinning is the only integrity check available |
 | TurboVNC's Inno Setup installer unpacked rather than run, with a forked innoextract | `bin/omarchy-setup-wsl-viewer` | Running it would install a VNC *server* on Windows and ask for elevation. The Arch innoextract (1.9) cannot read Inno Setup 6.x |
 | Leftover UltraVNC files removed | `bin/omarchy-setup-wsl-viewer` | It was tried before TurboVNC, cannot resize the remote desktop, and is not coming back |
-| The shortcut targets `wslg.exe -d <distro> --cd ~ -- bash -lc startx`, and refuses to guess the distribution name | `bin/omarchy-setup-wsl-viewer` | `wslg.exe` launches without a console window. `defaultName` is the name the image *asked* for, not necessarily the one it got |
+| The shortcut targets `wslg.exe -d <distro> --cd ~ -- bash -lc start-omarchy`, and refuses to guess the distribution name | `bin/omarchy-setup-wsl-viewer` | `wslg.exe` launches without a console window. `defaultName` is the name the image *asked* for, not necessarily the one it got |
 | The Windows icon rendered from `logo.svg` at 256 down to 16, largest first | `install/wsl/image.sh` | So the large Start menu tiles are not upscaled from a smaller frame. Needs the `librsvg` addition |
 
 ### Input, keyboard and clipboard
@@ -257,7 +259,7 @@ One rule shapes all of it: **WSL knowledge is quarantined.** It lives in `instal
 | --- | --- | --- |
 | `PULSE_SERVER` pointed at `unix:/mnt/wslg/PulseServer` | `install/wsl/wslg.sh` | Sound leaves the machine through WSLg's PulseAudio RDP sink |
 | `alsa-plugins` installed and `/etc/asound.conf` routing the default device to pulse | `install/wsl/audio.sh`, `install/wsl/packages.sh` | `/dev/snd` carries a timer and no card, so every ALSA application fails with `cannot find card '0'` — quietly. On hardware `pipewire-alsa` bridges this, but PipeWire's user services cannot run without a user manager |
-| `startx --diagnose` reports the PulseAudio socket | `bin/omarchy-launch-wsl-session` | WSLg only tries at distribution start, and when it fails there is no second path to fall back to |
+| `start-omarchy --diagnose` reports the PulseAudio socket | `bin/omarchy-launch-wsl-session` | WSLg only tries at distribution start, and when it fails there is no second path to fall back to |
 
 ### Environment and locale
 

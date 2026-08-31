@@ -51,7 +51,7 @@ usage() {
 Usage: omarchy setup wsl viewer [--force]
 
 Downloads the Windows VNC viewers to your Windows profile and puts an
-Omarchy shortcut on your desktop, so 'startx' opens the desktop in a native
+Omarchy shortcut on your desktop, so 'start-omarchy' opens the desktop in a native
 Windows window with a shared clipboard.
 
   --force   re-download even when a viewer is already installed
@@ -134,7 +134,7 @@ install_shortcut() {
 
   # wslg.exe rather than wsl.exe: it launches without a console window, so no
   # terminal flashes up behind the desktop. bash -lc so the session starts from
-  # a login shell, the way it does when the user types startx themselves.
+  # a login shell, the way it does when the user types start-omarchy themselves.
   script=$(mktemp --suffix=.ps1)
   cat >"$script" <<PS1
 \$desktop = [Environment]::GetFolderPath('Desktop')
@@ -142,7 +142,7 @@ install_shortcut() {
 \$shell = New-Object -ComObject WScript.Shell
 \$sc = \$shell.CreateShortcut(\$link)
 \$sc.TargetPath = 'C:\\Program Files\\WSL\\wslg.exe'
-\$sc.Arguments = '-d $distro --cd ~ -- bash -lc startx'
+\$sc.Arguments = '-d $distro --cd ~ -- bash -lc start-omarchy'
 \$sc.IconLocation = "\$env:LOCALAPPDATA\\Omarchy\\omarchy.ico,0"
 \$sc.Description = 'Start the Omarchy desktop in a window'
 \$sc.WorkingDirectory = \$env:USERPROFILE
@@ -158,7 +158,7 @@ PS1
   if [[ -n $link ]]; then
     echo "Created the desktop shortcut: $link"
   else
-    echo "Note: could not create the desktop shortcut; 'startx' still works." >&2
+    echo "Note: could not create the desktop shortcut; 'start-omarchy' still works." >&2
   fi
 }
 
@@ -252,7 +252,7 @@ fi
 if (( ! force )) && installed; then
   echo "TigerVNC $VIEWER_VERSION is already installed at $viewer"
   install_shortcut
-  echo "Run 'startx' to open the desktop."
+  echo "Run 'start-omarchy' to open the desktop."
   exit 0
 fi
 
@@ -287,4 +287,4 @@ echo "Installed $viewer"
 
 install_shortcut
 
-echo "Run 'startx' to open the Omarchy desktop in a Windows window."
+echo "Run 'start-omarchy' to open the Omarchy desktop in a Windows window."

@@ -13,14 +13,12 @@ if [ -d /mnt/wslg ]; then
 fi
 PROFILE
 
-# startx is what people reach for to get a desktop out of a WSL shell. There is
-# no X server to start here, so hand off to the Wayland session launcher.
-# xorg-xinit is not installed and /usr/local/bin precedes /usr/bin, so this
-# shadows nothing. Resolve through PATH rather than linking to a fixed path:
-# the launcher lives in $OMARCHY_PATH/bin under a dev-linked checkout and in
-# /usr/bin when it comes from the package.
-install -Dm755 /dev/stdin /usr/local/bin/startx <<'STARTX'
+# The entry point the image gives users: the desktop never starts on its own,
+# and this is what brings it up. Resolve through PATH rather than linking to a
+# fixed path, because the launcher lives in $OMARCHY_PATH/bin under a dev-linked
+# checkout and in /usr/bin when it comes from the package.
+install -Dm755 /dev/stdin /usr/local/bin/start-omarchy <<'START_OMARCHY'
 #!/bin/bash
 
 exec omarchy-launch-wsl-session "$@"
-STARTX
+START_OMARCHY
