@@ -99,7 +99,32 @@ done
 [[ -s $inhibit_pid_file ]] || fail "update starts its sleep inhibitor"
 
 inhibitor_pid=$(<"$inhibit_pid_file")
-kill -0 "$inhibitor_pid" 2>/dev/null || fail "sleep inhibitor is still running when its descriptors are inspected"
+
+# The inhibitor is orphaned the moment omarchy-update-stay-awake returns, so it
+# is reparented to a subreaper this test has no relationship to and nothing here
+# ever reaps it. That makes kill -0 useless on its own: it succeeds against a
+# zombie, so a dead inhibitor would satisfy both this check and the one below.
+# Read the state instead, the same way omarchy-update-stay-awake does.
+inhibitor_state() {
+  local process_stat
+
+  [[ -r /proc/$inhibitor_pid/stat ]] || return 1
+  process_stat=$(</proc/"$inhibitor_pid"/stat)
+  process_stat="${process_stat##*) }"
+  printf '%s\n' "${process_stat%% *}"
+}
+
+# Gone, or dead and waiting to be reaped. omarchy-update-stay-awake counts Z as
+# stopped too: a zombie has already released the inhibition, and only its exit
+# status is outstanding.
+inhibitor_stopped() {
+  local state
+
+  state=$(inhibitor_state) || return 0
+  [[ $state == "Z" ]]
+}
+
+! inhibitor_stopped || fail "sleep inhibitor is still running when its descriptors are inspected"
 
 lock_target=$(readlink -f "$runtime_dir/omarchy-update.lock")
 inhibitor_holds_lock=0
@@ -113,7 +138,15 @@ wait "$inhibit_update_pid"
 (( inhibitor_holds_lock == 0 )) || fail "update keeps the update lock out of the sleep inhibitor it leaves running"
 pass "omarchy-update keeps the update lock out of its sleep inhibitor"
 
-kill -0 "$inhibitor_pid" 2>/dev/null &&
+# Poll rather than assert once. Nothing here reaps the inhibitor, so the moment
+# it stops being visible is the reaper's to choose, and a loaded machine widens
+# that window indefinitely -- on a lazy reaper the zombie outlives this test.
+for _ in {1..100}; do
+  inhibitor_stopped && break
+  sleep 0.05
+done
+
+inhibitor_stopped ||
   fail "update waits for its sleep inhibitor to stop before continuing"
 pass "omarchy-update waits for its sleep inhibitor to stop"
 
