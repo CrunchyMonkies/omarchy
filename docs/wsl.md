@@ -55,11 +55,34 @@ Or, to control the install location:
 wsl --import Omarchy C:\wsl\omarchy C:\path\to\omarchy.wsl
 ```
 
-On first run `/etc/oobe.sh` installs Omarchy — that is the setup phase, several gigabytes over the network — then names the account after the Windows user that launched it — `cmd.exe /c echo %USERNAME%`, case folded with spaces and dots turned into hyphens — creates it at uid 1000, and runs `omarchy-provision-user --first-install` as that user. Only that obvious mapping is automatic: a Windows name carrying apostrophes, accents or a leading digit falls back to asking, rather than silently stripping characters and creating an account nobody chose. `[oobe] defaultUid = 1000` in `/etc/wsl-distribution.conf` is what makes WSL log in as that account from then on, so `/etc/wsl.conf` deliberately carries no `[user] default` — a name pinned at build time would be wrong for everyone who picks a different one.
+On first run `/etc/oobe.sh` hands off to `bin/omarchy-provision-wsl-owner` — the setup screen, below — which asks its questions, installs Omarchy, creates the account at uid 1000 and runs `omarchy-provision-user --first-install` as that user. `[oobe] defaultUid = 1000` in `/etc/wsl-distribution.conf` is what makes WSL log in as that account from then on, so `/etc/wsl.conf` deliberately carries no `[user] default` — a name pinned at build time would be wrong for everyone who picks a different one.
 
 `/etc/oobe.sh` names `OMARCHY_SETUP_CONTEXT` when it runs `omarchy-provision-user`. Without it that command assumes an ISO chroot, and `install/user/mise-work.sh` then looks for a bundled Node tarball under `/opt/packages` — a path only the ISO has — and fails the whole finalization. Naming any other context sends it to the network for Node, which is what WSL wants. Every WSL image built before this failed there, silently, because the first run swallowed the failure rather than reporting it.
 
 The image ships with no password hashes in `/etc/shadow`, which Microsoft requires of a distributable image. Windows owns the authentication boundary, so there is no password for `sudo` to prompt for; `/etc/sudoers.d/omarchy-wsl` grants `%wheel` passwordless sudo to match.
+
+### The setup screen
+
+`bin/omarchy-provision-wsl-owner` is the same screen the first boot on hardware draws: the logo running a `ttfx` ColorShift, the `gum` prompts, the summary table, and the 34-cell progress bar with its rotating tips. It is the same screen because it is the same code — `install/provisioning/setup-ui.sh` holds all of it, and `bin/omarchy-provision-owner` sources the same file. `install/provisioning/setup-form.sh` was already that arrangement for the questions, and the two are meant to be sourced together: the form calls `notice()`, which the UI defines.
+
+The library leaves two things to its caller, because they are the parts that genuinely differ. `scale_console_font` is the framebuffer console's problem and defaults to nothing, so only `omarchy-provision-owner` overrides it. `setup_progress` moves the bar, and each caller measures against its own phases — LUKS re-keying on hardware, a package download here.
+
+What the WSL screen does not ask is as deliberate as what it does:
+
+| Not asked | Why |
+| --- | --- |
+| Password | The image carries no `/etc/shadow` hashes, Windows owns the login boundary, and `/etc/sudoers.d/omarchy-wsl` grants `%wheel` passwordless sudo to match |
+| Hostname | WSL names the distribution |
+| Timezone | WSL syncs the clock from the Windows host, which is why `tzupdate` is on the skip list |
+| Keyboard layout | Windows applies the layout before the keysym reaches the session. The viewer sends keysyms rather than scan codes, and wayvnc's virtual keyboard carries its own keymap — a compositor `kb_layout` here would either do nothing or apply a second layout on top of the first. It is the same fact `install/wsl/hypr.sh` resolves bindings by symbol for |
+| LUKS, SDDM, the console font, the VT palette | No encrypted root, no display manager, and Windows Terminal is not a framebuffer console |
+
+What it does ask is the account — the username prefilled from the Windows sign-in through `OMARCHY_USERNAME_DEFAULT`, since WSL ties the distribution to that account anyway — the git identity, and two questions about the size of the download, which on a machine where nothing is installed yet is the whole cost of a first run:
+
+- **the preinstalled applications**, wired to `install/wsl/omarchy-wsl-defer.packages` and, when declined, to the `preinstalls-removed` marker `bin/omarchy-remove-preinstalls` already writes and `default/hypr/helpers.lua` already reads. `omarchy-install-preinstalls` is the way back, so the deferred list has to stay identical to the one that command restores; `test/shell.d/wsl-oobe-test.sh` holds the two together.
+- **the AI coding agents**, wired to `OMARCHY_SKIP_AGENT_CLIS` in `install/user/mise.sh`. `omarchy-install-agent-clis` is the way back.
+
+`/etc/oobe.sh` offers the screen and never depends on it. A terminal it cannot draw on, a missing `gum` or a bug in it all fall through to the plain path that asks nothing and installs everything, because the one thing that must not happen there is a user left with no account.
 
 ## What the image contains
 
@@ -105,7 +128,7 @@ It runs twice. The image phase writes the directives before anything is installe
 
 `install/wsl/services.sh` is the inverse of `install/config/enable-services.sh`. It sets `multi-user.target` as the default, masks `sddm.service`, enables `seatd.service`, and masks the units Microsoft documents as breaking WSL — including `NetworkManager` and `systemd-resolved`, which are exactly what the hardware path enables. WSL supplies the interface and writes `/etc/resolv.conf` itself.
 
-Enabling is not starting, and that distinction only started mattering with the phase split. While this step ran in the build container there was no next boot to wait for — the image had not started yet, and every symlink took effect when someone imported it. It runs on a booted machine now, during the first run, so `seatd` would be enabled but not running, `/run/seatd.sock` would not exist, and `startx` in that same session would die at `CBackend::create() failed!` until the distribution was restarted. So when `/run/systemd/system` says systemd is really running, the step reloads the manager, starts `seatd`, and stops any masked unit that was already up — leaving the machine in the state a reboot would.
+Enabling is not starting, and that distinction only started mattering with the phase split. While this step ran in the build container there was no next boot to wait for — the image had not started yet, and every symlink took effect when someone imported it. It runs on a booted machine now, during the first run, so `seatd` would be enabled but not running, `/run/seatd.sock` would not exist, and `start-omarchy` in that same session would die at `CBackend::create() failed!` until the distribution was restarted. So when `/run/systemd/system` says systemd is really running, the step reloads the manager, starts `seatd`, and stops any masked unit that was already up — leaving the machine in the state a reboot would.
 
 Every call uses `systemctl --root=/`. The build container has no systemd on the bus, and unlike an `arch-chroot` install systemd cannot tell it is not the real root, so a plain `systemctl mask` there fails with "System has not been booted with systemd". With `--root=` it is a pure file operation, which is all that matters for symlinks that take effect on the next boot.
 
@@ -117,7 +140,7 @@ Every call uses `systemctl --root=/`. The build container has no systemd on the 
 start-omarchy
 ```
 
-`install/wsl/wslg.sh` installs `/usr/local/bin/start-omarchy` as a small wrapper that execs `omarchy-launch-wsl-session`. It is the entry point the image gives users: the desktop never starts on its own, and this is what brings it up.
+`install/wsl/wslg.sh` installs `/usr/local/bin/start-omarchy` as a small wrapper that execs `omarchy-launch-wsl-session`. There is no X server involved despite the name — `start-omarchy` is simply where people reach for a desktop from a WSL shell. `xorg-xinit` is not installed and `/usr/local/bin` precedes `/usr/bin`, so nothing is shadowed.
 
 The launcher points aquamarine at the VKMS device, unsets `WAYLAND_DISPLAY`, and starts the compositor under its own D-Bus session bus:
 
@@ -305,6 +328,9 @@ That needs a patched neatvnc, built by `install/wsl/neatvnc.sh`. A VNC client on
 | `bin/omarchy-dev-wsl-build` | Builds the `.wsl` image in Docker |
 | `bin/omarchy-dev-wsl-kernel` | Builds a VKMS-enabled WSL2 kernel in Docker |
 | `bin/omarchy-apply-wsl` | Root-owned system setup inside the image |
+| `bin/omarchy-provision-wsl-owner` | The first-run setup screen: the questions, the install, the account |
+| `install/provisioning/setup-ui.sh` | The screen both first runs draw — greeter, chrome, progress bar |
+| `install/wsl/omarchy-wsl-defer.packages` | The applications the first run may be told to skip |
 | `bin/omarchy-launch-wsl-session` | What `start-omarchy` runs: the session, wayvnc, and the viewer |
 | `install/wsl/uwsm.sh` | Shims `uwsm-app` and `uwsm`, which need a systemd user manager |
 | `bin/omarchy-setup-wsl-viewer` | Fetches the Windows VNC viewer the desktop opens in |

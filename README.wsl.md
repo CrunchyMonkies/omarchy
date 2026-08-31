@@ -112,7 +112,7 @@ wsl --shutdown
 wsl --install --from-file C:\Users\<you>\omarchy.wsl --location C:\Users\<you>\WSL\Omarchy --name Omarchy
 ```
 
-On first launch the OOBE installs Omarchy — several gigabytes over the network, so it takes a while — then creates your account, named after your Windows sign-in, and finishes provisioning. There is nothing to answer unless your Windows name contains characters a UNIX name cannot.
+On first launch Omarchy's setup screen runs: your account name, prefilled from your Windows sign-in, your git identity, and whether to include the preinstalled applications and the AI coding agents. Then it installs — several gigabytes over the network, so it takes a while, behind a progress bar.
 
 If it fails partway, most likely on a network that went away, nothing is lost: the next shell you open offers to pick up where it left off, and `sudo /etc/oobe.sh` does the same on demand. The log is `/var/log/omarchy-install.log`.
 
@@ -300,6 +300,8 @@ Subtracting a name only declines to ask for it. `sddm`, `plymouth`, `avahi` and 
 
 Added for WSL only: `sudo` (absent from the Arch WSL rootfs), `seatd`, `wayvnc`, `tigervnc` and `alsa-plugins`.
 
+`install/wsl/omarchy-wsl-defer.packages` is a fourth list and a conditional one: the applications the setup screen offers to skip, subtracted only when it is told to. It has to stay identical to the list `omarchy-install-preinstalls` restores, or the way back is partial.
+
 `install/wsl/omarchy-wsl-bootstrap.packages` is a third list, and a much shorter one: `sudo`, `gum` and `ttfx`, the only packages the image carries before the first run installs everything else. `install/wsl/image.sh` and `install/wsl/neatvnc.sh` each need a toolchain for one step — ImageMagick for the shortcut icon, `base-devel` for the neatvnc build — and `install/helpers/transient-packages.sh` takes both back out afterwards, along with everything they dragged in.
 
 ### What a distributable image may contain
@@ -314,6 +316,8 @@ Added for WSL only: `sudo` (absent from the Arch WSL rootfs), `seatd`, `wayvnc`,
 | `generateResolvConf` on, paired with the masked `systemd-resolved` | `default/wsl/wsl.conf` | So the two cannot fight over the file |
 | No `[user] default`; `[oobe] defaultUid = 1000` and `defaultName = Omarchy` instead | `default/wsl/wsl.conf`, `default/wsl/wsl-distribution.conf` | A pinned name would be wrong for anyone who picks a different one, and `wsl --install --from-file` needs a name to register under |
 | `/etc/oobe.sh` always exits 0 | `default/wsl/oobe.sh` | WSL refuses to open a shell at all on a non-zero exit, leaving no way in to fix anything |
+| The setup screen offered by `/etc/oobe.sh` and never depended on | `default/wsl/oobe.sh`, `bin/omarchy-provision-wsl-owner` | A terminal it cannot draw on, a missing gum or a bug in it must still leave an account behind, so the plain path stays as the fallback |
+| No password, hostname, timezone or keyboard layout asked for | `bin/omarchy-provision-wsl-owner` | WSL owns all four. The layout in particular is applied by Windows before the keysym reaches the session, so asking again would apply a second one |
 | The desktop installed by `/etc/oobe.sh` rather than baked in | `install/wsl/all-image.sh`, `install/wsl/all-setup.sh` | Baking it in put the tarball past 5 GB gzipped, more than a GitHub release asset may be. The image carries the setup screen; the first launch downloads the rest |
 | Setup resumed from `/etc/profile.d/omarchy-wsl-setup.sh` when `provisioning/pending` survives | `install/wsl/image.sh`, `default/wsl/setup-resume.sh` | WSL runs the OOBE command exactly once, and it has to exit 0 either way, so a first run that lost the network needs some other way back |
 | Man pages, texinfo, `/usr/share/doc` and every locale but `en_US` excluded through `NoExtract` | `install/wsl/pacman-noextract.sh` | Nothing else strips them, and a later `pacman -Syu` would put them back. Applied twice, because `install/post-install/pacman.sh` restores the shipped `pacman.conf` over them |
