@@ -142,7 +142,14 @@ echo "Finalizing Omarchy for $username..."
 # The per-user setup /etc/skel cannot seed: xdg dirs, default browser, theme
 # links, install/user/all.sh. Losing it is recoverable — the user can rerun
 # 'omarchy-provision-user --force' — so it must not block the first shell.
-if runuser -l "$username" -c 'omarchy-provision-user --first-install'; then
+#
+# OMARCHY_SETUP_CONTEXT has to be named. Without it omarchy-provision-user
+# assumes an ISO chroot, and install/user/mise-work.sh then looks for a bundled
+# Node tarball in /opt/packages -- a path only the ISO has -- and fails the whole
+# finalization. Any context that is not the ISO's or the hardware provisioner's
+# sends it to the network for Node instead, which is what WSL wants.
+if runuser -l "$username" -c \
+   'OMARCHY_SETUP_CONTEXT=provision-wsl-owner omarchy-provision-user --first-install'; then
   user_provisioned=1
 else
   user_provisioned=0

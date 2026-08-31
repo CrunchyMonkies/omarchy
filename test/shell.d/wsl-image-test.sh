@@ -646,6 +646,24 @@ grep -qE '^exit 0$' "$ROOT/default/wsl/oobe.sh" ||
   fail "oobe.sh always reports success to WSL"
 pass "oobe.sh always reports success to WSL"
 
+# omarchy-provision-user assumes an ISO chroot when no context is named, and
+# install/user/mise-work.sh then demands a Node tarball from /opt/packages, which
+# only the ISO has. Every WSL image built before this failed user finalization
+# there, silently, because the first run swallowed the failure.
+grep -q 'OMARCHY_SETUP_CONTEXT=provision-wsl-owner omarchy-provision-user' \
+  "$ROOT/default/wsl/oobe.sh" ||
+  fail "oobe.sh tells omarchy-provision-user this is not an ISO chroot"
+
+# The context has to be one mise-work.sh routes to the network, i.e. neither of
+# the two that name a directory to unpack a bundled tarball from.
+for bundled in iso-chroot provision-owner; do
+  grep -q "OMARCHY_SETUP_CONTEXT=$bundled" "$ROOT/default/wsl/oobe.sh" &&
+    fail "the WSL context does not claim a bundled Node tarball it has no way to have"
+done
+grep -q 'provision-owner) NODE_PACKAGE_DIR=' "$ROOT/install/user/mise-work.sh" ||
+  fail "mise-work.sh still routes contexts to a bundled tarball directory"
+pass "the first run tells the user setup it is not an ISO chroot"
+
 # WSL runs the OOBE command once. A setup that failed halfway has to be
 # resumable without re-importing the image, and the marker is what says it is
 # owed -- the same one omarchy-provision-owner.service gates on for hardware.

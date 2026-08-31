@@ -57,6 +57,8 @@ wsl --import Omarchy C:\wsl\omarchy C:\path\to\omarchy.wsl
 
 On first run `/etc/oobe.sh` installs Omarchy — that is the setup phase, several gigabytes over the network — then names the account after the Windows user that launched it — `cmd.exe /c echo %USERNAME%`, case folded with spaces and dots turned into hyphens — creates it at uid 1000, and runs `omarchy-provision-user --first-install` as that user. Only that obvious mapping is automatic: a Windows name carrying apostrophes, accents or a leading digit falls back to asking, rather than silently stripping characters and creating an account nobody chose. `[oobe] defaultUid = 1000` in `/etc/wsl-distribution.conf` is what makes WSL log in as that account from then on, so `/etc/wsl.conf` deliberately carries no `[user] default` — a name pinned at build time would be wrong for everyone who picks a different one.
 
+`/etc/oobe.sh` names `OMARCHY_SETUP_CONTEXT` when it runs `omarchy-provision-user`. Without it that command assumes an ISO chroot, and `install/user/mise-work.sh` then looks for a bundled Node tarball under `/opt/packages` — a path only the ISO has — and fails the whole finalization. Naming any other context sends it to the network for Node, which is what WSL wants. Every WSL image built before this failed there, silently, because the first run swallowed the failure rather than reporting it.
+
 The image ships with no password hashes in `/etc/shadow`, which Microsoft requires of a distributable image. Windows owns the authentication boundary, so there is no password for `sudo` to prompt for; `/etc/sudoers.d/omarchy-wsl` grants `%wheel` passwordless sudo to match.
 
 ## What the image contains
