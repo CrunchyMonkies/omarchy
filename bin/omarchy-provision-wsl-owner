@@ -302,18 +302,27 @@ drop_preinstalls() {
     '
 }
 
+# Every step is checked rather than left to errexit. run_setup is called from a
+# `while !` in main(), and bash turns errexit off for the whole dynamic extent of
+# a command whose status is being tested -- including this function, and
+# including the background job it runs in. An earlier version relied on errexit
+# here and sailed straight past a failed install: it created the account, ran
+# the user setup against packages that were not there, cleared the pending
+# marker and told the user Omarchy was ready.
 run_provisioning() {
   echo setup >"$STATE_FILE"
   log_step "installing Omarchy"
   OMARCHY_WSL_SKIP_PREINSTALLS="$((1 - preinstalls))" \
-    omarchy-apply-wsl --first-install --setup
+    omarchy-apply-wsl --first-install --setup || return $?
 
   echo account >"$STATE_FILE"
-  create_user
+  create_user || return $?
 
   echo finalize >"$STATE_FILE"
-  finalize_user
-  (( preinstalls )) || drop_preinstalls
+  finalize_user || return $?
+  if (( ! preinstalls )); then
+    drop_preinstalls || return $?
+  fi
 
   echo cleanup >"$STATE_FILE"
   # Several gigabytes of downloaded packages, of no further use once installed.

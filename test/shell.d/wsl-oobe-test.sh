@@ -116,6 +116,63 @@ grep -q 'omarchy_clear_package_cache' "$owner" ||
   fail "the setup screen empties the package cache it filled"
 pass "the setup screen empties the package cache it filled"
 
+# run_provisioning, driven with every step stubbed, because a first run that
+# reports success after a failed install is the worst thing this screen can do --
+# it clears the pending marker, so nothing ever offers to finish the job. An
+# earlier version did exactly that: run_setup is called from a `while !`, bash
+# turns errexit off for the whole dynamic extent of a tested command, and a
+# failed install sailed through to "Omarchy is ready".
+provisioning_probe() {
+  OMARCHY_PATH="$ROOT" FAIL_AT="$1" TRACE="$2" bash -c '
+    set -euo pipefail
+    STATE_FILE=$(mktemp)
+    preinstalls=0
+
+    log_step() { :; }
+    omarchy-apply-wsl() { [[ $FAIL_AT == apply ]] && return 3; echo apply >>"$TRACE"; }
+    create_user()       { [[ $FAIL_AT == account ]] && return 4; echo account >>"$TRACE"; }
+    finalize_user()     { [[ $FAIL_AT == finalize ]] && return 5; echo finalize >>"$TRACE"; }
+    drop_preinstalls()  { [[ $FAIL_AT == preinstalls ]] && return 6; echo preinstalls >>"$TRACE"; }
+
+    eval "$(sed -n "/^run_provisioning()/,/^}$/p" "$1/bin/omarchy-provision-wsl-owner")"
+
+    # Called the way main() calls it -- a tested command, so errexit is off for
+    # everything below. That is the condition the guards have to survive.
+    run_provisioning && status=0 || status=$?
+    printf "status=%s\n" "$status" >>"$TRACE"
+    rm -f "$STATE_FILE"
+  ' probe "$ROOT" >/dev/null 2>&1
+}
+
+# fail-at : expected status : steps that should still have run
+for probe in \
+  "apply:3:" \
+  "account:4:apply" \
+  "finalize:5:apply account" \
+  "preinstalls:6:apply account finalize" \
+  "none:0:apply account finalize preinstalls"; do
+
+  IFS=: read -r fail_at expected_status expected_trace <<<"$probe"
+
+  trace=$(mktemp)
+  provisioning_probe "$fail_at" "$trace"
+
+  # `|| true`: grep exits 1 when the trace holds nothing but the status line,
+  # which is the expected result for a failure at the very first step.
+  reached=$(grep -v '^status=' "$trace" | paste -sd' ' || true)
+  status=$(sed -n 's/^status=//p' "$trace")
+  rm -f "$trace"
+
+  [[ $reached == "$expected_trace" ]] ||
+    fail "run_provisioning stops at the step that failed" \
+         "failing '$fail_at' reached: ${reached:-nothing}, expected: ${expected_trace:-nothing}"
+
+  [[ $status == "$expected_status" ]] ||
+    fail "run_provisioning reports the failing step's status" \
+         "failing '$fail_at' returned '$status', expected '$expected_status'"
+done
+pass "a failed step stops run_provisioning and is reported, errexit or not"
+
 # The progress bands cover the phases run_provisioning actually announces, and
 # nothing else -- a phase with no band falls to the catch-all and the bar stalls.
 phases=$(sed -n 's/^  echo \([a-z]*\) >"$STATE_FILE"$/\1/p' "$owner" | sort -u)

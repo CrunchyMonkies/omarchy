@@ -82,6 +82,8 @@ What it does ask is the account — the username prefilled from the Windows sign
 - **the preinstalled applications**, wired to `install/wsl/omarchy-wsl-defer.packages` and, when declined, to the `preinstalls-removed` marker `bin/omarchy-remove-preinstalls` already writes and `default/hypr/helpers.lua` already reads. `omarchy-install-preinstalls` is the way back, so the deferred list has to stay identical to the one that command restores; `test/shell.d/wsl-oobe-test.sh` holds the two together.
 - **the AI coding agents**, wired to `OMARCHY_SKIP_AGENT_CLIS` in `install/user/mise.sh`. `omarchy-install-agent-clis` is the way back.
 
+Every step in `run_provisioning` checks its own status rather than leaving it to `set -e`. `run_setup` is called from a `while !` in `main`, and bash disables errexit for the whole dynamic extent of a command whose status is being tested — the function, and the background job it runs in. An earlier version relied on errexit there and sailed past a failed install: it created the account, ran the user setup against packages that were not installed, cleared the pending marker and reported that Omarchy was ready. `test/shell.d/wsl-oobe-test.sh` drives all five failure positions to hold that shut.
+
 `/etc/oobe.sh` offers the screen and never depends on it. A terminal it cannot draw on, a missing `gum` or a bug in it all fall through to the plain path that asks nothing and installs everything, because the one thing that must not happen there is a user left with no account.
 
 ## What the image contains
