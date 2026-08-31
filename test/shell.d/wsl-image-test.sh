@@ -144,7 +144,7 @@ pass "the setup phase starts seatd rather than leaving it for a restart"
 
 # There is no display to scan out to, so the session is only reachable through
 # wayvnc and a viewer. Both are WSL-only additions the base manifest never names.
-for package in seatd wayvnc tigervnc; do
+for package in seatd wayvnc; do
   grep -q "packages+=(.*\b$package\b.*)" "$ROOT/install/wsl/packages.sh" ||
     fail "install/wsl/packages.sh installs $package"
 done
@@ -276,13 +276,71 @@ done
 pass "install/wsl/all-setup.sh runs the vscode and systemd-run leaves"
 
 # The viewer runs on Windows so the session can reach the Windows clipboard; an
-# X11 viewer inside WSLg bridges to Xwayland instead. The fallback has to stay,
-# because nothing on a fresh Windows install provides a VNC client.
+# X11 viewer inside WSLg bridges to Xwayland instead -- and never receives
+# SUPER, which is why there is no longer a fallback to one.
 grep -q 'windows_viewer_dir()' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "omarchy-launch-wsl-session prefers a Windows viewer"
-grep -q 'vncviewer -SecurityTypes None' "$ROOT/bin/omarchy-launch-wsl-session" ||
-  fail "omarchy-launch-wsl-session still falls back to the viewer inside WSL"
-pass "omarchy-launch-wsl-session prefers the Windows viewer and falls back"
+pass "omarchy-launch-wsl-session prefers the Windows viewer"
+
+# There is no falling back any more. The viewer inside WSL never receives SUPER,
+# so a session in it has no working keybindings -- and it was reached silently,
+# looking like a broken desktop rather than a missing viewer.
+! grep -qE '^\s*vncviewer ' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "the desktop never opens in the viewer inside WSL, which cannot receive SUPER"
+grep -q 'exit 1' <(sed -n '/^else$/,/^fi$/p' "$ROOT/bin/omarchy-launch-wsl-session" | tail -25) ||
+  fail "no viewer is a refusal, not a session that cannot be driven"
+pass "no Windows viewer refuses rather than opening one that cannot be driven"
+
+# The two ways to get there need opposite fixes, so the message tells them apart.
+grep -q 'Interop is not answering' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "an interop failure says so, since the viewer may well be installed"
+grep -q "Run 'omarchy setup wsl viewer'" "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "a missing viewer names the command that installs one"
+pass "a missing viewer and a silent interop failure are told apart"
+
+# The resolution itself, run rather than read. Interop drops often enough that a
+# session was downgraded to an unusable viewer while the viewer was installed,
+# so what the recorded path does is the part worth driving.
+#
+# cmd.exe is reached by absolute path and so cannot be stubbed here; these drive
+# the branches that do not need it, and the guard on its answer is checked by
+# reading, below.
+viewer_dir_fn=$(sed -n '/^windows_viewer_dir()/,/^}/p' "$ROOT/bin/omarchy-launch-wsl-session")
+viewer_tmp=$(mktemp -d)
+trap 'rm -rf "$viewer_tmp"' EXIT
+mkdir -p "$viewer_tmp/state/omarchy" "$viewer_tmp/recorded"
+
+resolve() {
+  XDG_STATE_HOME="$viewer_tmp/state" bash -c "
+    $viewer_dir_fn
+    windows_viewer_dir
+  " 2>/dev/null
+}
+
+# A recorded path that still exists is used as-is.
+printf '%s' "$viewer_tmp/recorded" >"$viewer_tmp/state/omarchy/wsl-viewer-dir"
+got=$(resolve)
+[[ $got == "$viewer_tmp/recorded" ]] ||
+  fail "a recorded viewer path is used as it stands" "got: $got"
+
+# One that no longer exists is not trusted -- the viewer was uninstalled or the
+# Windows profile moved, and returning it anyway is how you get "no viewer"
+# reported against a path nothing is at.
+printf '%s' "$viewer_tmp/gone" >"$viewer_tmp/state/omarchy/wsl-viewer-dir"
+got=$(resolve)
+[[ $got != "$viewer_tmp/gone" ]] ||
+  fail "a recorded path that has gone is not returned anyway" "got: $got"
+
+# Windows answering with nothing is a failure rather than an empty path passed
+# on as though it were an answer.
+grep -q '\[\[ -n $local_app_data \]\] || return 1' "$ROOT/bin/omarchy-launch-wsl-session" ||
+  fail "an empty answer from Windows fails rather than resolving to nothing"
+pass "the viewer path prefers what setup recorded, and fails rather than guessing"
+
+# And setup is what records it.
+grep -q 'wsl-viewer-dir' "$ROOT/bin/omarchy-setup-wsl-viewer" ||
+  fail "omarchy-setup-wsl-viewer records the path it installed into"
+pass "omarchy-setup-wsl-viewer records the path it installed into"
 
 # SourceForge publishes no signature for the download, so the pinned digest is
 # the only integrity check there is. A version bump that forgets it is exactly

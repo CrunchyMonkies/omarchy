@@ -112,7 +112,7 @@ Dropped: the display manager and boot splash, Bluetooth, printing and mDNS, the 
 
 Not everything on it actually goes. Subtracting a name only declines to ask for it, and `sddm`, `plymouth`, `avahi` and `wireplumber` are dependencies of `omarchy` and `omarchy-settings`, which the image installs whatever else it skips — they ship the files at fixed system paths `OMARCHY_PATH` does not cover. The entries stay because the reasoning still holds and a package that drops the dependency should take effect at once, but they are not what protects anything. For `sddm` that protection is the mask in `install/wsl/services.sh`.
 
-Added for WSL only: `sudo` (absent from the official Arch WSL rootfs) and the session's own runtime — `seatd`, `wayvnc` and `tigervnc`, all three explained under [The DRM device](#the-drm-device) and [The window](#the-window).
+Added for WSL only: `sudo` (absent from the official Arch WSL rootfs) and the session's own runtime — `seatd` and `wayvnc`, both explained under [The DRM device](#the-drm-device) and [The window](#the-window).
 
 `install/wsl/omarchy-wsl-bootstrap.packages` is a third and much shorter list: `sudo`, `gum` and `ttfx`, all the image phase installs. Everything else arrives with the setup phase.
 
@@ -197,7 +197,7 @@ Five commands go further and ask the user manager for a scope of their own, thro
 
 **The session does not inherit WSLg's `DISPLAY`.** `/etc/profile.d/omarchy-wslg.sh` sets `DISPLAY=:0` so a GUI app started from a plain shell finds WSLg's X server, which is right for that case and wrong inside the session: there `:0` is a *foreign* display, belonging to a server whose windows appear on the Windows desktop rather than in the Omarchy one, and no Xwayland runs in the session to take the name back. An X11 client launched from the desktop connects there and its window simply never arrives. VS Code showed this plainly — six processes running, no window, nothing in any log — because Electron tries X11 first whenever `DISPLAY` is set and `XDG_SESSION_TYPE` is not `wayland`, and with no display manager here nothing sets the latter.
 
-`bin/omarchy-launch-wsl-session` therefore starts the compositor as `env -u DISPLAY XDG_SESSION_TYPE=wayland dbus-run-session -- start-hyprland`. Toolkits then choose Wayland, and Hyprland supplies its own Xwayland for whatever still needs X. The launcher keeps its own `DISPLAY`, because the fallback viewer inside WSL is itself an X11 client of WSLg.
+`bin/omarchy-launch-wsl-session` therefore starts the compositor as `env -u DISPLAY XDG_SESSION_TYPE=wayland dbus-run-session -- start-hyprland`. Toolkits then choose Wayland, and Hyprland supplies its own Xwayland for whatever still needs X. The launcher keeps its own `DISPLAY`, because a viewer inside WSL is itself an X11 client of WSLg.
 
 ### Audio
 
@@ -321,7 +321,13 @@ wayvnc binds the loopback only. WSL2 forwards localhost from Windows, so nothing
 
 Neither viewer needs dmabuf and neither negotiates a Wayland protocol version, which is why showing the session over VNC works at all. Nesting Hyprland directly in WSLg's Weston does not: that Weston is 9.0.0 and advertises `wl_compositor` v5 against the v6 aquamarine binds.
 
-**The viewer runs on Windows when one is installed.** `omarchy setup wsl viewer` fetches two, into `%LOCALAPPDATA%\Omarchy`, and the launcher prefers them in order: TurboVNC, then TigerVNC, then the `tigervnc` viewer inside WSL — which is why that package stays in the image.
+**The viewer runs on Windows, and the session does not start without one.** `omarchy setup wsl viewer` fetches two, into `%LOCALAPPDATA%\Omarchy`, and the launcher prefers TurboVNC, then TigerVNC.
+
+There used to be a third: the `tigervnc` viewer inside WSL, reached when neither Windows one was found. It is gone, and the package with it. That viewer never receives `SUPER`, so the desktop it opened had no working keybindings — and it was reached silently, which made a missing viewer look like a broken desktop. A session nobody can drive is worse than no session, so the launcher now refuses and says why.
+
+Which of two reasons matters, because they need opposite fixes. If nothing was recorded and `cmd.exe` did not answer, interop is down and the viewer may well be installed — `wsl --shutdown` is the fix. If the directory resolved but holds no viewer, `omarchy setup wsl viewer` is. `startomarchy --diagnose` reports the same distinction.
+
+The launcher finds that directory from a path `omarchy-setup-wsl-viewer` records at `~/.local/state/omarchy/wsl-viewer-dir`, falling back to asking Windows only when nothing is recorded or what was recorded has gone. It used to ask Windows every time, and that needs interop: one `cmd.exe` call coming back empty was enough to drop a session into the unusable viewer while TurboVNC sat installed all along.
 
 TurboVNC is the one the desktop uses, because it is the only one that **grabs the keyboard in a window** (`-GrabKeyboard Always`). Without a grab, Windows keeps `SUPER` and every Omarchy binding is dead; TigerVNC grabs only in full screen ([upstream #1899](https://github.com/TigerVNC/tigervnc/issues/1899)). **CTRL-ALT-SHIFT-G** toggles the grab when you want Windows shortcuts back.
 

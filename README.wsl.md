@@ -141,7 +141,7 @@ TurboVNC is the one the desktop uses, because it is the only one that grabs the 
 
 This is the one step the image cannot do for you: it runs in a build container with no Windows to write to.
 
-Without it the desktop still opens, in the viewer inside WSL. That one cannot reach the Windows clipboard and never receives `SUPER`.
+Without it the desktop does not open at all. The viewer inside WSL never receives `SUPER`, so a session in it has no working keybindings; the launcher says which is missing — a viewer, or the interop it needs to find one — rather than starting something nobody can drive.
 
 ## 5. Start the desktop
 
@@ -239,7 +239,8 @@ One rule shapes all of it: **WSL knowledge is quarantined.** It lives in `instal
 | wayvnc bound to `127.0.0.1:5900` with `--name=Omarchy` | `bin/omarchy-launch-wsl-session` | WSL2 forwards localhost, so binding wider only puts an unauthenticated desktop on the LAN. Without `--name` the window is titled "WayVNC" |
 | The RFB desktop name retitled to follow focus, throttled to 1 s | `bin/omarchy-hyprland-vnc-title-watch` **(shared)** | The name is otherwise fixed for the session, leaving one window standing in for the whole desktop unable to say what is in it. neatvnc spends a pending framebuffer request on each update, so chasing every event costs about 40% of throughput |
 | The compositor's cursor turned off, via `hyprctl eval` | `bin/omarchy-launch-wsl-session` | A headless output has no cursor plane, so Hyprland composites the pointer into the frame wayvnc captures — and wayvnc forwards a cursor too, so the viewer shows two. `hyprctl keyword` does not work against the Lua config |
-| TurboVNC preferred, then TigerVNC on Windows, then the viewer inside WSL | `bin/omarchy-launch-wsl-session` | TurboVNC is the only one that grabs the keyboard in a window ([TigerVNC #1899](https://github.com/TigerVNC/tigervnc/issues/1899)); the in-WSL one cannot reach the Windows clipboard |
+| TurboVNC preferred, then TigerVNC on Windows, and a refusal when neither is there | `bin/omarchy-launch-wsl-session` | TurboVNC is the only one that grabs the keyboard in a window ([TigerVNC #1899](https://github.com/TigerVNC/tigervnc/issues/1899)). The viewer inside WSL never receives `SUPER`, so falling back to it opened a desktop with no working keybindings, silently |
+| The viewer directory recorded at setup and preferred over asking Windows | `bin/omarchy-setup-wsl-viewer`, `bin/omarchy-launch-wsl-session` | Finding it needs interop, and interop drops — one empty `cmd.exe` answer was enough to drop a session into the unusable viewer while TurboVNC was installed |
 | TurboVNC started through `javaw.exe` with `-Djava.library.path=` at its own `java/` directory | `bin/omarchy-launch-wsl-session` | What `vncviewer.bat` does, minus the console window. The helper DLL is what implements the grab |
 | The address written `127.0.0.1::5900` | `bin/omarchy-launch-wsl-session` | A single colon means a display number, so `127.0.0.1:5900` would be port 11800 |
 | `-Scale 100` pinned | `bin/omarchy-launch-wsl-session` | The viewer persists parameters between runs, and any automatic scaling silently disables desktop resizing |
@@ -299,7 +300,7 @@ One rule shapes all of it: **WSL knowledge is quarantined.** It lives in `instal
 
 Subtracting a name only declines to ask for it. `sddm`, `plymouth`, `avahi` and `wireplumber` arrive anyway, because the `omarchy` and `omarchy-settings` packages depend on them and the image cannot skip those two — they ship the files at fixed system paths that `OMARCHY_PATH` does not cover. That is why `install/wsl/services.sh` masks `sddm.service`: the mask, not the skip list, is what keeps the desktop from starting on its own.
 
-Added for WSL only: `sudo` (absent from the Arch WSL rootfs), `seatd`, `wayvnc`, `tigervnc` and `alsa-plugins`.
+Added for WSL only: `sudo` (absent from the Arch WSL rootfs), `seatd`, `wayvnc` and `alsa-plugins`.
 
 `install/wsl/omarchy-wsl-defer.packages` is a fourth list and a conditional one: the applications the setup screen offers to skip, subtracted only when it is told to. It has to stay identical to the list `omarchy-install-preinstalls` restores, or the way back is partial.
 

@@ -166,14 +166,51 @@ session_running() {
 # The viewer runs on Windows when omarchy-setup-wsl-viewer has put it there.
 # That is what gets the Windows clipboard: wayvnc already carries the selection
 # both ways over ext_data_control_manager_v1, but a viewer inside WSL bridges it
-# to Xwayland instead. Same cmd.exe idiom as default/wsl/oobe.sh.
+# to Xwayland instead.
+#
+# The recorded path first, and only then Windows. Asking Windows needs interop,
+# and interop drops: a session came up in a viewer with no working keybindings
+# because this one cmd.exe call came back empty while the viewer was installed
+# all along. omarchy-setup-wsl-viewer writes the path when it installs there,
+# the directory does not move, and re-deriving it every launch only adds a way
+# to fail. cmd.exe stays for the first run, before setup has recorded anything.
 windows_viewer_dir() {
-  local local_app_data
+  local recorded local_app_data
+  recorded="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/wsl-viewer-dir"
 
+  if [[ -r $recorded ]]; then
+    local_app_data=$(<"$recorded")
+    if [[ -n $local_app_data && -d $local_app_data ]]; then
+      echo "$local_app_data"
+      return 0
+    fi
+  fi
+
+  # Same cmd.exe idiom as default/wsl/oobe.sh: it prints a UNC working-directory
+  # warning first, and its output is CRLF.
   local_app_data=$(/mnt/c/Windows/System32/cmd.exe /c "echo %LOCALAPPDATA%" 2>/dev/null | tail -1 | tr -d '\r\n')
   [[ -n $local_app_data ]] || return 1
 
   echo "$(wslpath -u "$local_app_data")/Omarchy"
+}
+
+# The desktop does not start without one, so --diagnose has to answer the same
+# question the launcher does, and tell a missing viewer apart from an interop
+# failure that only makes it look missing.
+viewer_summary() {
+  local dir
+  dir=$(windows_viewer_dir) || {
+    echo "cannot ask Windows — interop is not answering"
+    return
+  }
+
+  if [[ -f $dir/TurboVNC/java/VncViewer.jar ]]; then
+    echo "TurboVNC in $dir"
+  elif [[ -f $dir/vncviewer64.exe ]]; then
+    echo "TigerVNC in $dir — SUPER needs full screen"
+  else
+    echo "NONE in $dir — run 'omarchy setup wsl viewer'"
+  fi
 }
 
 diagnose() {
@@ -188,6 +225,7 @@ diagnose() {
   echo "  KMS device:  ${device:-MISSING}"
   echo "  render node: $(stray_render_node && echo "present — see below" || echo "none, as expected")"
   echo "  renderer:    $(render_summary)"
+  echo "  viewer:      $(viewer_summary)"
   echo "  seatd:       $(seatd_running && echo "running" || echo "NOT RUNNING")"
   echo "  session:     $(session_running && echo "Hyprland already running" || echo "not running")"
   echo
@@ -599,9 +637,24 @@ elif [[ -n $viewer_dir ]] && [[ -f $viewer_dir/vncviewer64.exe ]]; then
   hide_compositor_cursor
   "$viewer_dir/vncviewer64.exe" -SecurityTypes=None "${tigervnc_options[@]}" "$VNC_ADDRESS:$VNC_PORT"
 else
-  echo "No Windows VNC viewer found, so the desktop opens in the one inside WSL." >&2
-  echo "That one cannot reach the Windows clipboard and never receives SUPER;" >&2
-  echo "'omarchy setup wsl viewer' installs one that can." >&2
-  hide_compositor_cursor
-  vncviewer -SecurityTypes None "${tigervnc_options[@]}" "$VNC_ADDRESS:$VNC_PORT"
+  # No viewer, so no session. This used to open the viewer inside WSL, which
+  # never receives SUPER -- a desktop with no working keybindings, reached
+  # silently and looking like a bug in the desktop rather than a missing viewer.
+  #
+  # The two ways to get here need opposite fixes, so they are told apart. An
+  # empty viewer_dir means nothing was recorded and Windows did not answer,
+  # which says nothing about whether a viewer is installed.
+  if [[ -z $viewer_dir ]]; then
+    echo "Error: cannot ask Windows where the VNC viewer is, so the desktop" >&2
+    echo "cannot be shown. Interop is not answering -- the viewer may well be" >&2
+    echo "installed." >&2
+    echo >&2
+    echo "Run 'wsl --shutdown' from Windows and start the distribution again." >&2
+  else
+    echo "Error: no Windows VNC viewer in $viewer_dir, so the desktop cannot" >&2
+    echo "be shown." >&2
+    echo >&2
+    echo "Run 'omarchy setup wsl viewer' to install one." >&2
+  fi
+  exit 1
 fi

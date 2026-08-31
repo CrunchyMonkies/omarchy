@@ -104,6 +104,14 @@ viewer_dir="$(wslpath -u "$local_app_data")/Omarchy"
 viewer="$viewer_dir/vncviewer64.exe"
 turbovnc_dir="$viewer_dir/TurboVNC"
 
+# Record it for omarchy-launch-wsl-session. It asks Windows the same question
+# every time it starts, and that answer needs interop -- which drops often
+# enough that a session was downgraded to a viewer with no working keybindings
+# because one cmd.exe call came back empty. The directory does not move, so
+# there is no reason to re-derive it on every launch.
+install -Dm644 /dev/stdin \
+  "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/wsl-viewer-dir" <<<"$viewer_dir"
+
 # The image build cannot create this: it runs in a container with no Windows to
 # write to. So it happens here, alongside the viewer, as the other half of
 # setting up the Windows side.

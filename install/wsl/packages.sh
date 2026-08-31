@@ -34,13 +34,10 @@ fi
 #              logind's job, but WSL has no seat for logind to manage
 #   wayvnc   - serves the session on 127.0.0.1, since there is no display to
 #              scan out to. See omarchy-launch-wsl-session
-#   tigervnc - the fallback viewer, used when no Windows one is installed. It
-#              shows the session in a WSLg window but cannot reach the Windows
-#              clipboard; omarchy-setup-wsl-viewer installs one that can
 #   alsa-plugins - the ALSA pulse plugin, so ALSA applications reach WSLg's
 #              PulseAudio. On hardware pipewire-alsa does this, but pipewire's
 #              user services cannot run here. install/wsl/audio.sh routes to it
-packages+=(sudo seatd wayvnc tigervnc alsa-plugins)
+packages+=(sudo seatd wayvnc alsa-plugins)
 
 echo "Installing ${#packages[@]} packages ($(read_package_list "$skip_list" | wc -l) skipped as WSL-inert)"
 
