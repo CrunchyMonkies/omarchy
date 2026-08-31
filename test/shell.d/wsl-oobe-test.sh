@@ -108,6 +108,14 @@ grep -q 'preinstalls-removed' "$ROOT/default/hypr/helpers.lua" ||
   fail "the marker is what the keybindings read"
 pass "declining the preinstalls leaves no launcher for something that is not there"
 
+# The same -Scc that answered itself no in the build would answer itself no
+# here, over a cache several times the size.
+! grep -q 'pacman -Scc' "$owner" ||
+  fail "the setup screen does not clear the cache with a -Scc that answers itself no"
+grep -q 'omarchy_clear_package_cache' "$owner" ||
+  fail "the setup screen empties the package cache it filled"
+pass "the setup screen empties the package cache it filled"
+
 # The progress bands cover the phases run_provisioning actually announces, and
 # nothing else -- a phase with no band falls to the catch-all and the bar stalls.
 phases=$(sed -n 's/^  echo \([a-z]*\) >"$STATE_FILE"$/\1/p' "$owner" | sort -u)
