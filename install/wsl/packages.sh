@@ -11,6 +11,15 @@ skip_list="$OMARCHY_INSTALL/wsl/omarchy-wsl-skip.packages"
 
 mapfile -t packages < <(comm -23 <(read_package_list "$base_list") <(read_package_list "$skip_list"))
 
+# The first run asked whether to include the preinstalled applications. Unlike
+# the skip list this is a choice rather than a property of WSL, so it is applied
+# here rather than folded into the skip list -- and omarchy-install-preinstalls
+# is the way back.
+if [[ ${OMARCHY_WSL_SKIP_PREINSTALLS:-0} == 1 ]]; then
+  defer_list="$OMARCHY_INSTALL/wsl/omarchy-wsl-defer.packages"
+  mapfile -t packages < <(comm -23 <(printf '%s\n' "${packages[@]}") <(read_package_list "$defer_list"))
+fi
+
 if (( ${#packages[@]} == 0 )); then
   echo "Error: resolved an empty package set from $base_list" >&2
   exit 1

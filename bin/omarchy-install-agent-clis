@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# omarchy:summary=Install the AI coding agent CLIs (codex, claude, copilot, opencode, and the rest).
+# omarchy:examples=omarchy install agent clis
+
+# The same list install/user/all.sh runs during setup. Split out as a command
+# because the WSL first-run screen offers to skip it -- together the downloads
+# are the longest part of a first run -- and this is how it is answered later.
+
+set -euo pipefail
+
+if (( EUID == 0 )); then
+  echo "Error: omarchy-install-agent-clis installs into your home directory; run it as yourself." >&2
+  exit 1
+fi
+
+# Unset rather than inherited: this command is the way past the opt-out, so it
+# must not honour it.
+unset OMARCHY_SKIP_AGENT_CLIS
+
+bash "$OMARCHY_PATH/install/user/mise.sh"

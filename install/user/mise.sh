@@ -1,3 +1,11 @@
+# The agent CLIs. Each one is a download, and together they are the longest part
+# of a first run -- so the WSL first-run screen offers to skip them, and
+# omarchy-install-agent-clis is how they arrive later.
+if [[ ${OMARCHY_SKIP_AGENT_CLIS:-0} == 1 ]]; then
+  echo "Skipping the agent CLIs; run omarchy-install-agent-clis to install them."
+  return 0 2>/dev/null || exit 0
+fi
+
 omarchy-mise-install codex
 omarchy-mise-install claude
 omarchy-mise-install crush

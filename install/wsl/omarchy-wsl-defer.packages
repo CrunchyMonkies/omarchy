@@ -1,0 +1,23 @@
+# The preinstalled Omarchy applications, deferred when the first run is told to
+# skip them. install/wsl/packages.sh subtracts this list from the base manifest
+# when OMARCHY_WSL_SKIP_PREINSTALLS is set.
+#
+# This is not a WSL judgement about the applications -- they all work here. It
+# is the difference between a first run that downloads several gigabytes and one
+# that downloads rather fewer, on a machine where every byte came over the
+# network. omarchy-install-preinstalls puts them all back, which is why the list
+# must stay identical to the one bin/omarchy-remove-preinstalls drops;
+# test/shell.d/wsl-oobe-test.sh holds the two together.
+aether
+cliamp
+libreoffice-fresh
+xournalpp
+pinta
+obsidian
+obs-studio
+kdenlive
+moonlight-qt
+lazydocker
+omacut
+omacalc
+omawrite
