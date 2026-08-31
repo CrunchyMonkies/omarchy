@@ -217,7 +217,7 @@ jobs:
 
           ## What is here
 
-          - \`bzImage\` and \`bzImage-modules.tar.gz\` -- the VKMS kernel \`startx\` needs, because
+          - \`bzImage\` and \`bzImage-modules.tar.gz\` -- the VKMS kernel \`start-omarchy\` needs, because
             stock WSL2 kernels expose no DRM device. It takes hours to build, which is why it
             is published rather than left to you. Attached separately; if it is not here yet,
             it is still building.

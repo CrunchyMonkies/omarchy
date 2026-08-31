@@ -38,7 +38,7 @@ usage() {
 Usage: omarchy dev wsl kernel [--output PATH] [--branch REF] [--jobs N]
 
 Builds a WSL2 kernel with VKMS turned on, so /dev/dri/card0 exists and
-'startx' can bring up the Omarchy session in a WSLg window. Writes bzImage
+'start-omarchy' can bring up the Omarchy session in a WSLg window. Writes bzImage
 in the current directory unless --output says otherwise.
 
   --output PATH   where to write the built bzImage
@@ -260,7 +260,7 @@ To use it:
   5. Start the distribution again and confirm the device arrived:
 
        ls /dev/dri/card0
-       startx --diagnose
+       start-omarchy --diagnose
 
 The modules land under /lib/modules/\$(uname -r), and this kernel reports a
 different release than a stock one, so an older directory is left behind

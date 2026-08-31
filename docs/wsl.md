@@ -2,7 +2,7 @@
 
 This is how the WSL image works. For the order to do things in — build a kernel, import, set up the Windows side, start the desktop — see [`README.wsl.md`](../README.wsl.md).
 
-Omarchy can be built into an importable WSL image on top of the official [Arch Linux WSL rootfs](https://gitlab.archlinux.org/archlinux/archlinux-wsl). The image boots to a plain shell — **the desktop never starts on its own** — and `startx` brings the Hyprland session up as a window on the Windows desktop through WSLg.
+Omarchy can be built into an importable WSL image on top of the official [Arch Linux WSL rootfs](https://gitlab.archlinux.org/archlinux/archlinux-wsl). The image boots to a plain shell — **the desktop never starts on its own** — and `start-omarchy` brings the Hyprland session up as a window on the Windows desktop through WSLg.
 
 This is a development and evaluation target, not a supported install path. It exists so a Windows workstation can run this checkout without a VM or a spare machine.
 
@@ -75,10 +75,10 @@ Every call uses `systemctl --root=/`. The build container has no systemd on the 
 ## Starting the desktop
 
 ```bash
-startx
+start-omarchy
 ```
 
-`install/wsl/wslg.sh` installs `/usr/local/bin/startx` as a small wrapper that execs `omarchy-launch-wsl-session`. There is no X server involved despite the name — `startx` is simply where people reach for a desktop from a WSL shell. `xorg-xinit` is not installed and `/usr/local/bin` precedes `/usr/bin`, so nothing is shadowed.
+`install/wsl/wslg.sh` installs `/usr/local/bin/start-omarchy` as a small wrapper that execs `omarchy-launch-wsl-session`. It is the entry point the image gives users: the desktop never starts on its own, and this is what brings it up.
 
 The launcher points aquamarine at the VKMS device, unsets `WAYLAND_DISPLAY`, and starts the compositor under its own D-Bus session bus:
 
@@ -96,9 +96,9 @@ It starts in the background rather than replacing the launcher, because the sess
 
 The reason is visible in the cgroup tree. `user@1000.service` has leftover children (`init.scope`, `session.slice/dbus.service`, `session.slice/at-spi-dbus-bus.service`) whose `cgroup.procs` list **PID 0**: processes belonging to a PID namespace WSL holds open, which cannot be reaped and whose cgroups cannot be removed. systemd spawns services with `clone3(CLONE_INTO_CGROUP)`, which requires the target cgroup to be a leaf and returns `EBUSY` against a populated one. Nothing inside the distribution can clear it. A stock `archlinux` WSL distribution fails identically, so this is not something Omarchy causes or can fix.
 
-That rules out uwsm, whose whole job is driving systemd user units. So on WSL `startx` is the session leader instead, and takes on what uwsm would have done:
+That rules out uwsm, whose whole job is driving systemd user units. So on WSL `start-omarchy` is the session leader instead, and takes on what uwsm would have done:
 
-- **The session environment.** uwsm sources `/usr/share/uwsm/env.d/10-omarchy`, which is where `OMARCHY_PATH`, `TERMINAL` and `EDITOR` come from. The launcher reads `default/bash/env-bootstrap` and `default/uwsm/default` itself. A login shell already has `OMARCHY_PATH` from `/etc/profile.d/omarchy.sh`; `wsl -d Omarchy startx` is not a login shell, which is why the launcher cannot assume it.
+- **The session environment.** uwsm sources `/usr/share/uwsm/env.d/10-omarchy`, which is where `OMARCHY_PATH`, `TERMINAL` and `EDITOR` come from. The launcher reads `default/bash/env-bootstrap` and `default/uwsm/default` itself. A login shell already has `OMARCHY_PATH` from `/etc/profile.d/omarchy.sh`; `wsl -d Omarchy start-omarchy` is not a login shell, which is why the launcher cannot assume it.
 - **The session bus.** Normally `dbus.socket` in the user manager. `dbus-run-session` is the standalone equivalent.
 - **The activation environment.** `default/hypr/autostart.lua` runs `dbus-update-activation-environment --systemd --all`, which needs the user manager. The launcher runs the same command without `--systemd` once the compositor's socket exists, so the `xdg-desktop-portal` backends are activated knowing which display to talk to.
 - **The compositor's socket name.** `autostart.lua` publishes it into the user manager, and wayvnc needs it. With no manager to ask, the launcher lists the `wayland-N` sockets before starting Hyprland and takes whichever one appears afterwards. WSLg's own `wayland-0` is already in the first list.
@@ -121,7 +121,7 @@ The idle service has no off switch for the lock timeout on its own — `secondsF
 
 Omarchy launches every application through `uwsm-app`, which asks `wayland-wm-app-daemon.service` to put it in its own systemd user scope: `o.launch()` in `default/hypr/helpers.lua`, the menu, the shell's app library, and around thirty commands in `bin/`. With no user manager that daemon does not exist, and the desktop would come up able to launch nothing at all.
 
-`install/wsl/uwsm.sh` shims both `uwsm-app` and `uwsm` into `/usr/local/bin`, which precedes `/usr/bin` — the same mechanism as the `startx` shim, and for the same reason: WSL knowledge stays in `install/wsl/` rather than becoming a condition in thirty call sites. `uwsm-app` drops the options up to the first `--` and runs the command directly under `setsid --fork`, returning immediately the way the real one does, with output sent to the journal. `uwsm stop` becomes `hyprctl dispatch exit`; anything else falls through to the real `uwsm`.
+`install/wsl/uwsm.sh` shims both `uwsm-app` and `uwsm` into `/usr/local/bin`, which precedes `/usr/bin` — the same mechanism as the `start-omarchy` shim, and for the same reason: WSL knowledge stays in `install/wsl/` rather than becoming a condition in thirty call sites. `uwsm-app` drops the options up to the first `--` and runs the command directly under `setsid --fork`, returning immediately the way the real one does, with output sent to the journal. `uwsm stop` becomes `hyprctl dispatch exit`; anything else falls through to the real `uwsm`.
 
 The same environment is installed at `/etc/profile.d/omarchy-wslg.sh` for ordinary shells, so individual GUI apps opened from a prompt find the WSLg sockets too.
 
@@ -129,7 +129,7 @@ Five commands go further and ask the user manager for a scope of their own, thro
 
 `install/wsl/systemd-run.sh` shims it the same way, with two things it must get right. **Only `--user` is intercepted**; without that flag the call goes straight to `/usr/bin/systemd-run`, because the *system* manager works here and `omarchy-sudo-passwordless` schedules its timers against it. And **`--on-active` is translated, not discarded**: three of the five callers are timers, where the shutdown and reboot paths use the delay to return before the machine goes down and `omarchy-reminder` schedules minutes ahead. A shim that collapsed those to "run now" would reboot the machine out from under the command that asked and fire every reminder immediately — worse than not running them. The spans become a `sleep` before the command, and output goes to the journal rather than nowhere, so the next failure of this kind is visible.
 
-**VS Code refuses to start quietly inside WSL.** Its launcher, `/usr/share/code/bin/code`, greps `/proc/version` for `Microsoft` — which matches, since WSL2 kernels are `microsoft-standard-WSL2` — then prints a notice recommending the Windows build and blocks on `read -r YN`. That breaks installing and launching alike: `omarchy-theme-set-vscode` runs `code --list-extensions` with stderr discarded, so `omarchy-install-editor-vscode` stops dead after the packages land with nothing on screen to explain why, and `code.desktop` is `Exec=code %F`, so launching under `uwsm-app` hands the prompt an empty stdin, which it reads as "no". `install/wsl/vscode.sh` sets `DONT_PROMPT_WSL_INSTALL=1` in `/etc/profile.d` — the launcher's own escape hatch, named in the message it prints. `/etc/profile.d` reaches both, because the desktop shortcut starts the session with `bash -lc startx` and everything `uwsm-app` launches inherits from there.
+**VS Code refuses to start quietly inside WSL.** Its launcher, `/usr/share/code/bin/code`, greps `/proc/version` for `Microsoft` — which matches, since WSL2 kernels are `microsoft-standard-WSL2` — then prints a notice recommending the Windows build and blocks on `read -r YN`. That breaks installing and launching alike: `omarchy-theme-set-vscode` runs `code --list-extensions` with stderr discarded, so `omarchy-install-editor-vscode` stops dead after the packages land with nothing on screen to explain why, and `code.desktop` is `Exec=code %F`, so launching under `uwsm-app` hands the prompt an empty stdin, which it reads as "no". `install/wsl/vscode.sh` sets `DONT_PROMPT_WSL_INSTALL=1` in `/etc/profile.d` — the launcher's own escape hatch, named in the message it prints. `/etc/profile.d` reaches both, because the desktop shortcut starts the session with `bash -lc start-omarchy` and everything `uwsm-app` launches inherits from there.
 
 **The session does not inherit WSLg's `DISPLAY`.** `/etc/profile.d/omarchy-wslg.sh` sets `DISPLAY=:0` so a GUI app started from a plain shell finds WSLg's X server, which is right for that case and wrong inside the session: there `:0` is a *foreign* display, belonging to a server whose windows appear on the Windows desktop rather than in the Omarchy one, and no Xwayland runs in the session to take the name back. An X11 client launched from the desktop connects there and its window simply never arrives. VS Code showed this plainly — six processes running, no window, nothing in any log — because Electron tries X11 first whenever `DISPLAY` is set and `XDG_SESSION_TYPE` is not `wayland`, and with no display manager here nothing sets the latter.
 
@@ -141,7 +141,7 @@ Five commands go further and ask the user manager for a scope of their own, thro
 
 That covers applications speaking PulseAudio. It does not cover ALSA, and an ALSA application in that state does not fail loudly — it starts, draws its interface and plays silence, with `cannot find card '0'` buried where nobody looks. cliamp is one: it links `libasound` directly. On hardware the bridge comes from `pipewire-alsa`, but PipeWire's user services cannot run here at all without a systemd user manager, so `install/wsl/packages.sh` installs `alsa-plugins` for ALSA's own pulse plugin and `install/wsl/audio.sh` writes `/etc/asound.conf` pointing the default device at it.
 
-All of this depends on WSLg actually running, and WSLg only tries when the distribution starts. When its daemon fails there is no audio at all and no second path to fall back to, so `startx --diagnose` reports the PulseAudio server alongside everything else. `/mnt/wslg/stderr.log` records why WSLg failed; restarting the distribution is what retries it.
+All of this depends on WSLg actually running, and WSLg only tries when the distribution starts. When its daemon fails there is no audio at all and no second path to fall back to, so `start-omarchy --diagnose` reports the PulseAudio server alongside everything else. `/mnt/wslg/stderr.log` records why WSLg failed; restarting the distribution is what retries it.
 
 ### Keybindings
 
@@ -157,9 +157,9 @@ All of this depends on WSLg actually running, and WSLg only tries when the distr
 
 **Hyprland needs a DRM device with a display attached, and stock WSL2 kernels have none.** Aquamarine wants a device it can both allocate GBM buffers on and find a CRTC in. WSL2 exposes Microsoft's `/dev/dxg`, which is not a DRM device at all: on a stock kernel `/dev/dri` does not exist.
 
-So on a stock kernel, everything except the full session works. The CLI, themes, config and individual GUI apps over WSLg are all fine; `startx` is not.
+So on a stock kernel, everything except the full session works. The CLI, themes, config and individual GUI apps over WSLg are all fine; `start-omarchy` is not.
 
-`startx --diagnose` reports what is present and what is missing without starting anything.
+`start-omarchy --diagnose` reports what is present and what is missing without starting anything.
 
 The device Omarchy uses is VKMS, the kernel's virtual KMS driver. It is a complete DRM device with no hardware behind it, which is exactly the shape needed here: it supplies the allocator fd and a CRTC, and nothing is ever scanned out of it. To get one, build a WSL2 kernel with it turned on:
 
@@ -206,7 +206,7 @@ Then, from Windows rather than from inside WSL (it ends every distribution):
 wsl --shutdown
 ```
 
-**No DRM render node may be present.** Community kernel patches exist that give `dxgkrnl` a DRM driver, and they are actively harmful here: they add a `renderD` node that Mesa has no driver for, aquamarine prefers it over the KMS fd anyway, and then every buffer import against it fails. The desktop draws, but screen capture hangs and window resizes never apply. Omarchy's kernel deliberately does not carry those patches, so `/dev/dri` holds `card0` alone. `/dev/dxg` is a separate char device and is untouched, so WSL's own GPU passthrough is unaffected. `startx --diagnose` calls out a stray `renderD*` for this reason.
+**No DRM render node may be present.** Community kernel patches exist that give `dxgkrnl` a DRM driver, and they are actively harmful here: they add a `renderD` node that Mesa has no driver for, aquamarine prefers it over the KMS fd anyway, and then every buffer import against it fails. The desktop draws, but screen capture hangs and window resizes never apply. Omarchy's kernel deliberately does not carry those patches, so `/dev/dri` holds `card0` alone. `/dev/dxg` is a separate char device and is untouched, so WSL's own GPU passthrough is unaffected. `start-omarchy --diagnose` calls out a stray `renderD*` for this reason.
 
 Rendering is entirely software. There is no GPU here Mesa can drive, so the launcher sets `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe`; without them EGL dies with `DRI2: failed to load driver`.
 
@@ -266,7 +266,7 @@ That needs a patched neatvnc, built by `install/wsl/neatvnc.sh`. A VNC client on
 | `bin/omarchy-dev-wsl-build` | Builds the `.wsl` image in Docker |
 | `bin/omarchy-dev-wsl-kernel` | Builds a VKMS-enabled WSL2 kernel in Docker |
 | `bin/omarchy-apply-wsl` | Root-owned system setup inside the image |
-| `bin/omarchy-launch-wsl-session` | What `startx` runs: the session, wayvnc, and the viewer |
+| `bin/omarchy-launch-wsl-session` | What `start-omarchy` runs: the session, wayvnc, and the viewer |
 | `install/wsl/uwsm.sh` | Shims `uwsm-app` and `uwsm`, which need a systemd user manager |
 | `bin/omarchy-setup-wsl-viewer` | Fetches the Windows VNC viewer the desktop opens in |
 | `install/wsl/all.sh` | The ordered step list |

@@ -32,7 +32,7 @@ grep -q 'systemctl --root=/ set-default multi-user.target' "$ROOT/install/wsl/se
 pass "install/wsl/services.sh boots to multi-user.target"
 
 # The session reaches the VKMS device through libseat, and logind has no seat to
-# offer it here. Without seatd running, startx cannot open /dev/dri/card0.
+# offer it here. Without seatd running, start-omarchy cannot open /dev/dri/card0.
 grep -q 'systemctl --root=/ enable seatd.service' "$ROOT/install/wsl/services.sh" ||
   fail "install/wsl/services.sh enables seatd.service"
 pass "install/wsl/services.sh enables seatd.service"
@@ -79,6 +79,20 @@ pass "the pacman sandbox opt-out is container-only"
 grep -q 'dbus-run-session -- start-hyprland' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "omarchy-launch-wsl-session starts the compositor under its own session bus"
 pass "omarchy-launch-wsl-session owns the session without systemd --user"
+
+# The desktop never starts on its own, so the image has to give users an entry
+# point, and this shim is it. Nothing else installs one.
+grep -q 'install -Dm755 /dev/stdin /usr/local/bin/start-omarchy ' "$ROOT/install/wsl/wslg.sh" ||
+  fail "install/wsl/wslg.sh shims start-omarchy"
+grep -q 'exec omarchy-launch-wsl-session' "$ROOT/install/wsl/wslg.sh" ||
+  fail "the start-omarchy shim hands off to omarchy-launch-wsl-session"
+pass "install/wsl/wslg.sh shims start-omarchy onto the session launcher"
+
+# The old name was removed rather than aliased, so the shortcut and the shim
+# have to agree -- a stale 'bash -lc startx' would start nothing.
+grep -q "bash -lc start-omarchy" "$ROOT/bin/omarchy-setup-wsl-viewer" ||
+  fail "the Windows shortcut starts the desktop with start-omarchy"
+pass "the Windows shortcut and the shim agree on the entry point"
 
 # Every application Omarchy launches goes through uwsm-app, which needs the user
 # manager. Without these shims the desktop starts and can launch nothing.
@@ -231,8 +245,8 @@ pass "the cursor is drawn once, whichever viewer runs"
 grep -q 'wslg_audio_present()' "$ROOT/bin/omarchy-launch-wsl-session" ||
   fail "omarchy-launch-wsl-session can tell whether audio is available"
 grep -q 'audio:.*wslg_audio_present' "$ROOT/bin/omarchy-launch-wsl-session" ||
-  fail "startx --diagnose reports audio"
-pass "startx --diagnose reports whether audio is available"
+  fail "start-omarchy --diagnose reports audio"
+pass "start-omarchy --diagnose reports whether audio is available"
 
 # WSL has no sound card, so ALSA has nothing to open and an ALSA application
 # starts, draws its interface and plays silence with no error to show for it --

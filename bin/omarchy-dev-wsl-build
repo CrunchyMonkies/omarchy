@@ -44,7 +44,7 @@ Linux WSL rootfs. Writes omarchy-<date>.wsl in the current directory unless
 --output says otherwise.
 
 The image boots to a shell — the desktop never starts on its own. Running
-startx inside it brings up the Hyprland session in a WSLg window.
+start-omarchy inside it brings up the Hyprland session in a WSLg window.
 
   --output PATH      where to write the .wsl image
   --no-dev-link      ship the released /usr/share/omarchy instead of overlaying
@@ -311,5 +311,5 @@ echo
 echo "Import it on Windows with:"
 echo "  wsl --install --from-file <path-to-the-image>"
 echo
-echo "The desktop does not start on its own. Run 'startx' inside the"
+echo "The desktop does not start on its own. Run 'start-omarchy' inside the"
 echo "distribution to bring up the Omarchy session in a WSLg window."

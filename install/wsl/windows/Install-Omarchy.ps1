@@ -38,7 +38,7 @@
 
 .PARAMETER SkipKernel
   Import the image without touching the kernel or .wslconfig. The CLI works;
-  'startx' does not, because a stock WSL2 kernel exposes no DRM device.
+  'start-omarchy' does not, because a stock WSL2 kernel exposes no DRM device.
 
 .PARAMETER Force
   Replace an existing distribution of the same name, and overwrite an existing
@@ -562,7 +562,7 @@ try {
 
   if ($SkipKernel) {
     Write-Step 'Skipping the kernel (-SkipKernel)'
-    Write-Warn "The CLI will work. 'startx' will not: a stock WSL2 kernel has no DRM device."
+    Write-Warn "The CLI will work. 'start-omarchy' will not: a stock WSL2 kernel has no DRM device."
   } elseif (-not $kernel) {
     Write-Step 'No kernel available'
     Write-Warn 'Nothing to install, so the desktop cannot start.'
@@ -609,8 +609,8 @@ Write-Host @"
 Two steps are left, both inside the distribution:
 
   wsl -d $Name
-  omarchy setup wsl viewer    # fetches the Windows VNC client and makes a shortcut
-  startx                      # brings up the desktop
+  omarchy setup wsl viewer   # fetches the Windows VNC client and makes a shortcut
+  start-omarchy              # brings up the desktop
 
 'omarchy setup wsl viewer' is what puts an Omarchy Desktop shortcut on your Windows
 desktop and installs TurboVNC, which is the only viewer that grabs the keyboard in a
@@ -618,7 +618,7 @@ window -- without a grab, Windows keeps SUPER and no keybinding reaches the sess
 
 If the desktop does not come up, run:
 
-  startx --diagnose
+  start-omarchy --diagnose
 
 It reports what the session needs against what this machine has, without starting
 anything, and names the fix for whichever piece is missing.

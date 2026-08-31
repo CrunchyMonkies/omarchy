@@ -6,7 +6,7 @@ name: WSL kernel
 # kernel on every tag would cost a great deal for an identical artifact.
 #
 # Stock WSL2 kernels expose Microsoft's /dev/dxg and no DRM device, so Hyprland
-# has nothing to render on and `startx` cannot work. docs/wsl.md covers why.
+# has nothing to render on and `start-omarchy` cannot work. docs/wsl.md covers why.
 
 on:
   workflow_dispatch:

@@ -4,7 +4,7 @@
 # exist in the base list; test/shell.d/wsl-image-test.sh enforces that.
 
 # The display manager is the only thing that ever starts the compositor, and on
-# WSL the desktop must never come up on its own. startx is the way in.
+# WSL the desktop must never come up on its own. start-omarchy is the way in.
 sddm
 
 # Boot splash for a bootloader WSL does not have.
