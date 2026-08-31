@@ -69,11 +69,11 @@ omarchy_username_taken() { getent passwd "$1" >/dev/null; }
 # just declined.
 tips=(
   "Super + Space opens the Omarchy menu for apps, settings, and more"
-  "The desktop does not start on its own here -- run startx"
+  "The desktop does not start on its own here -- run start-omarchy"
   "Run 'omarchy setup wsl viewer' for a Windows VNC client and a desktop shortcut"
   "Super + K shows all the key bindings"
   "Super is the Windows or command key on your keyboard"
-  "startx --diagnose says what the session needs and what this machine has"
+  "start-omarchy --diagnose says what the session needs and what this machine has"
   "Closing the desktop window ends the session"
   "Dragging the desktop window's edge resizes the desktop with it"
   "Switch themes from Style > Theme in the Omarchy menu"
@@ -382,7 +382,7 @@ run_setup() {
   echo
   say "Omarchy is ready, $username."
   echo
-  say "The desktop does not start on its own here. Run ${DIM}startx${RESET} to bring"
+  say "The desktop does not start on its own here. Run ${DIM}start-omarchy${RESET} to bring"
   say "up the Hyprland session in a window, or just use the CLI from this shell."
   echo
   (( preinstalls )) || say --foreground 8 "omarchy-install-preinstalls adds the applications you skipped."

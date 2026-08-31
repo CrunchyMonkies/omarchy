@@ -48,7 +48,7 @@ done
 # no next boot to wait for -- the image had not started yet.
 #
 # It runs on a booted machine now: /etc/oobe.sh calls it during the first run.
-# So the enable above leaves seatd enabled but not running, and startx in that
+# So the enable above leaves seatd enabled but not running, and start-omarchy in that
 # same session finds no /run/seatd.sock, libseat has nothing to talk to and
 # Hyprland dies at "CBackend::create() failed!". Telling someone their brand new
 # desktop needs a restart first is not an answer, so start it here.

@@ -327,7 +327,10 @@ got=$(resolve)
 # Windows profile moved, and returning it anyway is how you get "no viewer"
 # reported against a path nothing is at.
 printf '%s' "$viewer_tmp/gone" >"$viewer_tmp/state/omarchy/wsl-viewer-dir"
-got=$(resolve)
+# `|| true`: with nothing recorded that exists, this falls through to asking
+# Windows, and that needs interop -- which is exactly the thing that drops. The
+# assertion holds either way, so the test must not depend on it answering.
+got=$(resolve || true)
 [[ $got != "$viewer_tmp/gone" ]] ||
   fail "a recorded path that has gone is not returned anyway" "got: $got"
 

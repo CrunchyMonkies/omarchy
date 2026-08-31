@@ -286,7 +286,7 @@ Swapchain: Failed acquiring a buffer
 
 The desktop then draws nothing at all: a viewer connects and reports zero rects. This is the same wall the `dxgkrnl` render node hit, one step earlier — there the dmabuf import failed, here the allocation does. llvmpipe allocates on VKMS because it renders into the buffer it was handed.
 
-An application has no such constraint. It renders into its own buffer and hands the compositor a finished surface, so nothing of its has to live on VKMS. `/usr/local/bin/uwsm-app` is where they are given the GPU: Omarchy launches every application through it, so the switch sits at that one chokepoint rather than at thirty call sites, and it acts on the `OMARCHY_WSL_GPU` marker the session launcher sets when the GPU is really there. Without a GPU, or with `OMARCHY_WSL_SOFTWARE_RENDER=1`, everything renders in software as it always did, and `startomarchy --diagnose` names which piece is missing.
+An application has no such constraint. It renders into its own buffer and hands the compositor a finished surface, so nothing of its has to live on VKMS. `/usr/local/bin/uwsm-app` is where they are given the GPU: Omarchy launches every application through it, so the switch sits at that one chokepoint rather than at thirty call sites, and it acts on the `OMARCHY_WSL_GPU` marker the session launcher sets when the GPU is really there. Without a GPU, or with `OMARCHY_WSL_SOFTWARE_RENDER=1`, everything renders in software as it always did, and `start-omarchy --diagnose` names which piece is missing.
 
 There is no Vulkan. `/usr/share/vulkan/icd.d` does not exist, so `vulkan-icd-loader` has no driver behind it. Hyprland renders with GLES, so the session does not care, but anything that asks for Vulkan will not find it.
 
@@ -325,7 +325,7 @@ Neither viewer needs dmabuf and neither negotiates a Wayland protocol version, w
 
 There used to be a third: the `tigervnc` viewer inside WSL, reached when neither Windows one was found. It is gone, and the package with it. That viewer never receives `SUPER`, so the desktop it opened had no working keybindings — and it was reached silently, which made a missing viewer look like a broken desktop. A session nobody can drive is worse than no session, so the launcher now refuses and says why.
 
-Which of two reasons matters, because they need opposite fixes. If nothing was recorded and `cmd.exe` did not answer, interop is down and the viewer may well be installed — `wsl --shutdown` is the fix. If the directory resolved but holds no viewer, `omarchy setup wsl viewer` is. `startomarchy --diagnose` reports the same distinction.
+Which of two reasons matters, because they need opposite fixes. If nothing was recorded and `cmd.exe` did not answer, interop is down and the viewer may well be installed — `wsl --shutdown` is the fix. If the directory resolved but holds no viewer, `omarchy setup wsl viewer` is. `start-omarchy --diagnose` reports the same distinction.
 
 The launcher finds that directory from a path `omarchy-setup-wsl-viewer` records at `~/.local/state/omarchy/wsl-viewer-dir`, falling back to asking Windows only when nothing is recorded or what was recorded has gone. It used to ask Windows every time, and that needs interop: one `cmd.exe` call coming back empty was enough to drop a session into the unusable viewer while TurboVNC sat installed all along.
 
