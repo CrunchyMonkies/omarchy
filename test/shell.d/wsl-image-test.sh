@@ -565,6 +565,22 @@ grep -q 'omarchy_transient_packages_end' "$ROOT/install/wsl/image.sh" ||
   fail "install/wsl/image.sh removes the icon renderer again"
 pass "the icon renderer does not stay in the image"
 
+# `pacman -Scc --noconfirm` reads like it empties the cache and does not: -Scc
+# asks "remove ALL files from cache? [y/N]", --noconfirm takes the default, and
+# the default is no. It shipped 434 MB of packages in the image before anyone
+# looked. The failure mode is silence, so the build asserts the result too.
+! grep -q 'pacman -Scc' "$ROOT/bin/omarchy-dev-wsl-build" ||
+  fail "the build does not clear the cache with a -Scc that answers itself no"
+! grep -q 'pacman -Scc' "$ROOT/default/wsl/oobe.sh" ||
+  fail "the first run does not clear the cache with a -Scc that answers itself no"
+for caller in bin/omarchy-dev-wsl-build default/wsl/oobe.sh; do
+  grep -q 'omarchy_clear_package_cache' "$ROOT/$caller" ||
+    fail "$caller empties the package cache"
+done
+grep -q 'the package cache reached the image' "$ROOT/bin/omarchy-dev-wsl-build" ||
+  fail "the build fails if the package cache reaches the image"
+pass "the package cache is emptied, and the build checks that it was"
+
 # The gate that keeps a regression from being noticed only when a release
 # upload is rejected.
 grep -q -- '--assert-max-size' "$ROOT/bin/omarchy-dev-wsl-build" ||

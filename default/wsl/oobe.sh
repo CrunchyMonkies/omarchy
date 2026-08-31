@@ -151,7 +151,8 @@ else
 fi
 
 # Several gigabytes of downloaded packages, of no further use once installed.
-pacman -Scc --noconfirm >/dev/null 2>&1
+source "$OMARCHY_PATH/install/helpers/package-cache.sh"
+omarchy_clear_package_cache
 
 if (( setup_applied && user_provisioned )); then
   rm -f "$PROVISIONING_DIR/pending"
