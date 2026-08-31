@@ -282,7 +282,7 @@ Two of its parameters bite. Booleans take no value — `-Toolbar 0` prints usage
 
 The reason to prefer the Windows one is the clipboard. wayvnc already carries the selection both ways over `ext_data_control_manager_v1`, and neatvnc implements the extended clipboard, which is what carries UTF-8 — plain RFB cut text is latin-1. But a viewer running inside WSL bridges that to Xwayland's selection, not to the Windows clipboard. A native client bridges it to Windows.
 
-**The cursor is drawn once, by the viewer.** A headless output has no hardware cursor plane, so Hyprland composites the pointer straight into the framebuffer that wayvnc captures — and wayvnc forwards the cursor to the client as well, so the viewer shows two. `install/wsl/hypr.sh` turns the compositor's cursor off (`cursor.invisible`) and the launcher passes `-AlwaysCursor=1 -CursorType=System`, so the client draws the only pointer, locally and without a round trip.
+**The cursor is drawn once, by the viewer.** A headless output has no hardware cursor plane, so Hyprland composites the pointer straight into the framebuffer that wayvnc captures — and wayvnc forwards the cursor to the client as well, so the viewer shows two. `hide_compositor_cursor()` in `bin/omarchy-launch-wsl-session` turns the compositor's cursor off (`hyprctl eval`, since `hyprctl keyword` does not work against the Lua config) and the launcher passes `-AlwaysCursor=1 -CursorType=System`, so the client draws the only pointer, locally and without a round trip. It is called on the TigerVNC branches and only those: TurboVNC hides its own pointer and expects the composited one.
 
 Dragging the window edge resizes the desktop to match, and only a `HEADLESS-*` output is eligible, which is why the VKMS one is not the desktop.
 

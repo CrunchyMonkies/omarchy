@@ -461,7 +461,7 @@ title_pid=$!
 # because a shared clipboard is the reason the Windows viewer is preferred, and
 # a default is a quiet thing to depend on.
 #
-# AlwaysCursor draws the pointer locally. install/wsl/hypr.sh turns the
+# AlwaysCursor draws the pointer locally. hide_compositor_cursor above turns the
 # compositor's cursor off, because a headless output has no hardware cursor
 # plane: the compositor composites the cursor into the framebuffer, wayvnc
 # forwards it as well, and the viewer ends up showing two. With the compositor
