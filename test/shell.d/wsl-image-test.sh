@@ -57,7 +57,10 @@ grep -q '^export GALLIUM_DRIVER=llvmpipe' "$launcher" ||
   fail "the compositor renders in software, because it allocates on VKMS"
 grep -q '^export LIBGL_ALWAYS_SOFTWARE=1' "$launcher" ||
   fail "the compositor renders in software, because it allocates on VKMS"
-! grep -q '^export GALLIUM_DRIVER=d3d12' "$launcher" ||
+# Unanchored on purpose. The regression this guards against had the export
+# indented inside an "if gpu_available" branch, which an anchored pattern walks
+# straight past -- the launcher must not name d3d12 anywhere, at any indent.
+! grep -q 'GALLIUM_DRIVER=d3d12' "$launcher" ||
   fail "the compositor is never pointed at the GPU, whatever the machine has"
 pass "the compositor renders in software, which is the only thing VKMS allows"
 
