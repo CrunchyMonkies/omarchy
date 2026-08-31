@@ -9,6 +9,13 @@
 # it, before the account exists, because those steps seed /etc/skel and record
 # the groups the account is created with.
 #
+# omarchy-provision-wsl-owner is that screen -- the same greeter, prompts and
+# progress bar the first boot on hardware draws. Everything below the call to it
+# is the fallback for when it cannot run: a terminal it cannot draw on, a gum
+# that is not there, a bug in it. The fallback asks nothing and installs
+# everything, because the one thing that must not happen here is a user left
+# with no account.
+#
 # WSL refuses to open a shell at all if this exits non-zero, which would leave
 # the user with no way in to fix anything. So the account creation is the only
 # hard requirement; everything after it is best effort and the script always
@@ -49,6 +56,15 @@ user_groups() {
   fi
   echo "$groups"
 }
+
+if omarchy-provision-wsl-owner; then
+  exit 0
+fi
+
+# ── Fallback ─────────────────────────────────────────────────────────────────
+
+echo "Continuing without the setup screen." >&2
+echo >&2
 
 if [[ -f $OMARCHY_PATH/logo.txt ]]; then
   cat "$OMARCHY_PATH/logo.txt"

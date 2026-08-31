@@ -1,0 +1,403 @@
+#!/bin/bash
+
+# omarchy:summary=First-run setup for the WSL image: ask, install Omarchy, create the account
+# omarchy:requires-sudo=true
+# omarchy:hidden=true
+
+# Runs from /etc/oobe.sh, as root, before WSL opens the first shell. The image
+# carries the setup screen and little else, so this is where Omarchy is actually
+# installed -- and where the questions the image could not answer at build time
+# get asked.
+#
+# It is the same screen the first boot on hardware shows, from the same
+# install/provisioning/setup-ui.sh and install/provisioning/setup-form.sh, minus
+# what WSL owns or does not have:
+#
+#   password   the image ships no /etc/shadow hashes (Microsoft requires that),
+#              Windows owns the login boundary, and /etc/sudoers.d/omarchy-wsl
+#              grants %wheel passwordless sudo to match
+#   hostname   WSL names the distribution
+#   timezone   WSL syncs the clock from the Windows host, which is why tzupdate
+#              is on the skip list
+#   keyboard   the layout is applied by Windows before the keysym reaches the
+#              session. The viewer sends keysyms rather than scan codes and
+#              wayvnc carries its own keymap, so a compositor kb_layout here
+#              would either do nothing or apply a second layout on top of the
+#              first. install/wsl/hypr.sh resolves bindings by symbol for the
+#              same reason
+#   LUKS, SDDM, the console font and the VT palette
+#              no encrypted root, no display manager, and Windows Terminal is
+#              not a framebuffer console
+
+set -euo pipefail
+
+PROVISIONING_DIR=/var/lib/omarchy/provisioning
+DEFAULT_UID=1000
+LOG_FILE=/var/log/omarchy-install.log
+STATE_FILE=/run/omarchy-provision-wsl-owner.state
+
+OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
+
+if (( EUID != 0 )); then
+  echo "Error: omarchy-provision-wsl-owner must run as root" >&2
+  exit 1
+fi
+
+# Setup finished on an earlier run. /etc/oobe.sh checks this too; checking again
+# means running the command by hand is safe.
+[[ -f $PROVISIONING_DIR/pending ]] || exit 0
+
+# Every prompt here is gum and the greeter draws on /dev/tty, so without a
+# terminal none of it can be answered and the wait loops would spin. The plain
+# path in /etc/oobe.sh is the right answer then, and a non-zero exit is how this
+# asks for it.
+if ! { [[ -t 0 && -t 1 ]] && : <>/dev/tty; } 2>/dev/null; then
+  echo "Error: omarchy-provision-wsl-owner needs a terminal to draw on." >&2
+  exit 1
+fi
+
+export PATH="$OMARCHY_PATH/bin:$PATH"
+
+source "$OMARCHY_PATH/install/provisioning/setup-form.sh"
+source "$OMARCHY_PATH/install/provisioning/setup-ui.sh"
+
+# This image has no accounts yet, but a resumed run may have created one.
+omarchy_username_taken() { getent passwd "$1" >/dev/null; }
+
+# The hardware tips point at a machine that is already installed. These point at
+# the two things a new WSL user has to do next, and at the answers they may have
+# just declined.
+tips=(
+  "Super + Space opens the Omarchy menu for apps, settings, and more"
+  "The desktop does not start on its own here -- run startx"
+  "Run 'omarchy setup wsl viewer' for a Windows VNC client and a desktop shortcut"
+  "Super + K shows all the key bindings"
+  "Super is the Windows or command key on your keyboard"
+  "startx --diagnose says what the session needs and what this machine has"
+  "Closing the desktop window ends the session"
+  "Dragging the desktop window's edge resizes the desktop with it"
+  "Switch themes from Style > Theme in the Omarchy menu"
+  "omarchy-install-preinstalls adds the applications you skipped"
+  "omarchy-install-agent-clis adds the coding agents you skipped"
+  "Windows files are under /mnt/c, and \\\\wsl.localhost reaches these from Windows"
+  "Super + Ctrl + V opens the clipboard manager"
+  "Super + 1 through 0 switches workspaces, add Shift to bring the window"
+  "Keep the system fresh with Update in the Omarchy menu"
+)
+
+log_step() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] wsl-setup: $1" >>"$LOG_FILE"
+}
+
+# ── Progress ─────────────────────────────────────────────────────────────────
+#
+# setup-ui.sh draws the screen; these are the bands, and they are not the
+# hardware ones. Nearly all the time goes into one step -- install/wsl/packages.sh
+# downloading the package set -- so its band is wide and mostly carried by the
+# time asymptote, with the run_logged count moving it the rest of the way.
+
+SETUP_PHASE=""
+SETUP_PHASE_T0=0
+PHASE_BASE=-1
+
+SETUP_TOTAL=$(grep -c '^run_logged' "$OMARCHY_PATH/install/wsl/all-setup.sh" 2>/dev/null || echo 0)
+FINALIZE_TOTAL=$(grep -c '^run_logged' "$OMARCHY_PATH/install/user/all.sh" 2>/dev/null || echo 0)
+
+# "lo hi tau steps". tau shapes the asymptotic floor and is not a prediction;
+# steps is how many run_logged lines the phase is expected to log, or 0 when
+# there is nothing to count and only time can move the bar.
+phase_band() {
+  case $1 in
+    setup)    echo "10 700 240 $SETUP_TOTAL" ;;
+    account)  echo "700 730 3 0" ;;
+    finalize) echo "730 970 60 $FINALIZE_TOTAL" ;;
+    cleanup)  echo "970 995 10 0" ;;
+    done)     echo "1000 1000 1 0" ;;
+    *)        echo "10 40 5 0" ;;
+  esac
+}
+
+setup_progress() {
+  local phase lo hi tau steps t span floor work completed
+
+  phase=$(cat "$STATE_FILE" 2>/dev/null || true)
+  [[ -n $phase ]] || phase=setup
+
+  if [[ $phase != "$SETUP_PHASE" ]]; then
+    SETUP_PHASE=$phase
+    SETUP_PHASE_T0=$NOW
+    PHASE_BASE=-1
+  fi
+
+  read -r lo hi tau steps <<<"$(phase_band "$phase")"
+  (( lo < SETUP_POS )) && lo=$SETUP_POS
+
+  t=$((NOW - SETUP_PHASE_T0))
+  span=$((hi - lo))
+  floor=$lo
+  (( span > 1 )) && floor=$((lo + (span - 1) * t / (t + tau)))
+
+  work=0
+  if (( steps > 0 )); then
+    completed=$(grep -cE '\] (Completed|Failed): ' "$LOG_FILE" 2>/dev/null || true)
+    [[ $completed =~ ^[0-9]+$ ]] || completed=0
+    (( PHASE_BASE < 0 )) && PHASE_BASE=$completed
+    completed=$((completed - PHASE_BASE))
+    (( completed < 0 )) && completed=0
+    (( completed > steps )) && completed=$steps
+    work=$((lo + (hi - lo) * completed / steps))
+  fi
+
+  (( floor > SETUP_POS )) && SETUP_POS=$floor
+  (( work > SETUP_POS )) && SETUP_POS=$work
+  (( SETUP_POS > 1000 )) && SETUP_POS=1000
+  return 0
+}
+
+# ── Questions ────────────────────────────────────────────────────────────────
+
+# WSL ties the distribution to whoever is signed in to Windows, so that name is
+# what the username field starts on. Windows allows names useradd will not:
+# spaces, capitals, apostrophes, accents. Only the obvious mappings are made --
+# case folded, spaces and dots to hyphens -- because silently stripping letters
+# would offer a name the user never chose ("Ünïcode" is not "ncode"). Anything
+# else leaves the field empty and they type their own.
+windows_username() {
+  local raw name
+
+  raw=$(/mnt/c/Windows/System32/cmd.exe /c "echo %USERNAME%" 2>/dev/null | tail -1 | tr -d '\r\n')
+  [[ $raw =~ ^[A-Za-z0-9\ ._-]+$ ]] || return 1
+
+  name=${raw,,}
+  name=${name//[ .]/-}
+
+  [[ $name =~ ^[a-z_][a-z0-9_-]*$ ]] || return 1
+
+  echo "$name"
+}
+
+user_form() {
+  step "Let's set up your Omarchy account..."
+
+  # A resumed run finds the account already there and does not offer to rename
+  # it: the home directory, the groups and everything under it are already that
+  # user's.
+  if getent passwd "$DEFAULT_UID" >/dev/null; then
+    username=$(getent passwd "$DEFAULT_UID" | cut -d: -f1)
+    say "Continuing setup for user: $username"
+    echo
+  else
+    OMARCHY_USERNAME_DEFAULT=$(windows_username) || OMARCHY_USERNAME_DEFAULT=""
+    if [[ -n $OMARCHY_USERNAME_DEFAULT ]] && omarchy_username_taken "$OMARCHY_USERNAME_DEFAULT"; then
+      OMARCHY_USERNAME_DEFAULT=""
+    fi
+    omarchy_prompt_username || return $?
+  fi
+
+  omarchy_prompt_identity || return $?
+
+  step "A couple of choices about what to install..."
+
+  # Both are about the size of the download, which is the whole cost of a first
+  # run here: nothing is on the machine yet. Default to yes, so the answer to
+  # both Returns is the full Omarchy.
+  if gum confirm --default \
+    "Include the preinstalled applications? (LibreOffice, Obsidian, OBS Studio, Kdenlive and the rest)"; then
+    preinstalls=1
+  else
+    preinstalls=0
+  fi
+
+  if gum confirm --default \
+    "Install the AI coding agents now? (codex, claude, copilot, opencode and the rest)"; then
+    agent_clis=1
+  else
+    agent_clis=0
+  fi
+}
+
+yes_no() { (( $1 )) && echo Yes || echo No; }
+
+confirm_form() {
+  clear_logo
+  echo
+  echo -e "Field,Value
+Username,$username
+Full name,${full_name:-[Skipped]}
+Email address,${email_address:-[Skipped]}
+Preinstalled applications,$(yes_no "$preinstalls")
+AI coding agents,$(yes_no "$agent_clis")" |
+    gum table -s "," -p | sed "s/^/${PADDING_LEFT_SPACES}/"
+
+  echo
+  say --foreground 3 "Installing takes a while and needs a network connection."
+  echo
+  gum confirm --negative "No, change it" "Does this look right?"
+}
+
+# ── Work ─────────────────────────────────────────────────────────────────────
+
+# Mirrors user_groups() in omarchy-provision-owner and /etc/oobe.sh, including
+# its refusal to grant the root-equivalent docker group at first run.
+user_groups() {
+  local groups="wheel" group
+  if [[ -f $PROVISIONING_DIR/groups ]]; then
+    while IFS= read -r group; do
+      [[ -n $group ]] || continue
+      [[ $group == "docker" ]] && continue
+      getent group "$group" >/dev/null || continue
+      [[ ",$groups," == *",$group,"* ]] || groups+=",$group"
+    done <"$PROVISIONING_DIR/groups"
+  fi
+  echo "$groups"
+}
+
+create_user() {
+  getent passwd "$DEFAULT_UID" >/dev/null && return 0
+
+  log_step "creating $username"
+
+  # No password. The image ships no hashes in /etc/shadow, Windows owns the
+  # login boundary, and /etc/sudoers.d/omarchy-wsl grants %wheel passwordless
+  # sudo to match.
+  useradd --uid "$DEFAULT_UID" --create-home --user-group \
+    --groups "$(user_groups)" --shell /bin/bash \
+    --comment "$full_name" "$username"
+}
+
+finalize_user() {
+  local home shell
+  home=$(getent passwd "$username" | cut -d: -f6)
+  shell=$(getent passwd "$username" | cut -d: -f7)
+
+  runuser -u "$username" -- env \
+    HOME="$home" \
+    USER="$username" \
+    LOGNAME="$username" \
+    SHELL="${shell:-/bin/bash}" \
+    OMARCHY_PATH="$OMARCHY_PATH" \
+    OMARCHY_INSTALL="$OMARCHY_PATH/install" \
+    OMARCHY_SETUP_CONTEXT=provision-wsl-owner \
+    OMARCHY_USER_NAME="$full_name" \
+    OMARCHY_USER_EMAIL="$email_address" \
+    OMARCHY_SKIP_AGENT_CLIS="$((1 - agent_clis))" \
+    OMARCHY_INSTALL_LOG_FILE="$LOG_FILE" \
+    OMARCHY_LOG_TO_STDOUT=1 \
+    "$OMARCHY_PATH/bin/omarchy-provision-user" --force --first-install
+}
+
+# The rest of what bin/omarchy-remove-preinstalls does. The packages themselves
+# were never installed -- install/wsl/packages.sh subtracted them -- but the web
+# apps and TUI wrappers are Omarchy's own launchers, created by the finalize
+# above, and the marker is what turns their keybindings and menu entries off.
+drop_preinstalls() {
+  local home
+  home=$(getent passwd "$username" | cut -d: -f6)
+
+  runuser -u "$username" -- env HOME="$home" OMARCHY_PATH="$OMARCHY_PATH" \
+    PATH="$OMARCHY_PATH/bin:$PATH" bash -c '
+      omarchy-webapp-remove-all
+      omarchy-tui-remove-all
+      install -Dm644 /dev/null "$HOME/.local/state/omarchy/preinstalls-removed"
+    '
+}
+
+run_provisioning() {
+  echo setup >"$STATE_FILE"
+  log_step "installing Omarchy"
+  OMARCHY_WSL_SKIP_PREINSTALLS="$((1 - preinstalls))" \
+    omarchy-apply-wsl --first-install --setup
+
+  echo account >"$STATE_FILE"
+  create_user
+
+  echo finalize >"$STATE_FILE"
+  finalize_user
+  (( preinstalls )) || drop_preinstalls
+
+  echo cleanup >"$STATE_FILE"
+  # Several gigabytes of downloaded packages, of no further use once installed.
+  pacman -Scc --noconfirm >/dev/null 2>&1 || true
+
+  log_step "setup complete"
+}
+
+run_setup() {
+  local status worker
+
+  while true; do
+    user_form && status=0 || status=$?
+    if (( status != 0 )); then
+      # Esc unwinds to the first question. Ctrl+C is the only other way out of a
+      # gum prompt, and there is nothing to reboot into here, so it does the
+      # same rather than offering a way out that does not exist.
+      continue
+    fi
+    confirm_form && break
+  done
+
+  touch "$LOG_FILE"
+  chmod 600 "$LOG_FILE"
+  echo setup >"$STATE_FILE"
+
+  run_provisioning >>"$LOG_FILE" 2>&1 &
+  worker=$!
+
+  set_now
+  SETUP_T0=$NOW
+  SETUP_PHASE_T0=$NOW
+
+  render_setup_static
+  while kill -0 "$worker" 2>/dev/null; do
+    render_setup_dynamic
+    sleep 0.5
+  done
+
+  status=0
+  wait "$worker" || status=$?
+  if (( status != 0 )); then
+    printf '%s' "$SHOW_CURSOR"
+    return "$status"
+  fi
+
+  # One full-bar frame so the finish does not cut in mid-progress.
+  echo done >"$STATE_FILE"
+  render_setup_dynamic
+  sleep 1
+
+  rm -f "$PROVISIONING_DIR/pending"
+
+  clear_logo
+  printf '%s' "$SHOW_CURSOR"
+  echo
+  say "Omarchy is ready, $username."
+  echo
+  say "The desktop does not start on its own here. Run ${DIM}startx${RESET} to bring"
+  say "up the Hyprland session in a window, or just use the CLI from this shell."
+  echo
+  (( preinstalls )) || say --foreground 8 "omarchy-install-preinstalls adds the applications you skipped."
+  (( agent_clis )) || say --foreground 8 "omarchy-install-agent-clis adds the coding agents you skipped."
+  echo
+}
+
+main() {
+  greeter_screen
+
+  while ! run_setup; do
+    clear_logo
+    echo
+    say --foreground 1 "Setup hit an error (details in $LOG_FILE)."
+    echo
+    if ! gum confirm --affirmative "Try again" --negative "Continue anyway" "Retry Omarchy setup?"; then
+      # Not a way out of setup, just out of this attempt: the pending marker
+      # stays, so /etc/profile.d/omarchy-wsl-setup.sh offers it again on the
+      # next login. /etc/oobe.sh has to leave an account behind either way, and
+      # does that itself if this returns without one.
+      say "Leaving setup for now. Open a new shell to pick it up again."
+      echo
+      return 1
+    fi
+  done
+}
+
+main
