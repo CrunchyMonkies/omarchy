@@ -50,3 +50,21 @@ wireless-regdb
 
 # WSL syncs the clock with the Windows host.
 tzupdate
+
+# Foreign-architecture emulation for a machine that runs one architecture. The
+# binfmt handlers register through systemd-binfmt, and the qemu-user-static it
+# depends on is the single largest package in the manifest.
+qemu-user-static-binfmt
+
+# Both install/config/locate.sh and install/post-install/localdb.sh are skipped
+# here -- indexing a bind-mounted C: drive is not something to do by default --
+# so no database is ever built for locate to read.
+plocate
+
+# PipeWire's session manager. There is no systemd user manager to run pipewire
+# under, so install/wsl/audio.sh routes ALSA to WSLg's PulseAudio instead.
+wireplumber
+
+# install/wsl/pacman-noextract.sh keeps man pages out of the image, so there is
+# nothing for man-db to index or search. tldr stays.
+man-db
