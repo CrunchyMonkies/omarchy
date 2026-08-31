@@ -39,7 +39,13 @@ STUB
 chmod +x "$fake_bin"/*
 
 hybrid_gpu() {
-  PATH="$fake_bin:$PATH" timeout --kill-after=1s 10s bash "$ROOT/bin/omarchy-hw-hybrid-gpu"
+  # The checkout's own bin/ has to be reachable: omarchy-hw-hybrid-gpu calls
+  # omarchy-cmd-present as a bare command, and without it that call exits 127,
+  # which reads as false -- every case would fall through to the GPU count and
+  # the supergfxctl stub would never be consulted. Scoped to this invocation
+  # rather than exported, because theme-install-guards asserts that a bin/
+  # command is *not* resolvable.
+  PATH="$fake_bin:$ROOT/bin:$PATH" timeout --kill-after=1s 10s bash "$ROOT/bin/omarchy-hw-hybrid-gpu"
 }
 
 hybrid_gpu ||
