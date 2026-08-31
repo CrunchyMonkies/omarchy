@@ -2,6 +2,9 @@
 # /etc/oobe.sh. Every step here is idempotent, because a first run that loses
 # the network partway through is resumed by running the phase again rather than
 # by re-importing the image.
+# Before packages.sh: the image ships no package databases, so there is nothing
+# for pacman to resolve a name against until this has run.
+run_logged "$OMARCHY_INSTALL/wsl/pacman-sync.sh"
 run_logged "$OMARCHY_INSTALL/wsl/packages.sh"
 run_logged "$OMARCHY_INSTALL/wsl/neatvnc.sh"
 run_logged "$OMARCHY_INSTALL/config/theme-system.sh"

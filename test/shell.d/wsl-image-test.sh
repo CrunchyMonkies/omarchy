@@ -411,6 +411,27 @@ for phase in all-image all-setup; do
 done
 pass "both phases are reachable from all.sh and from omarchy-apply-wsl"
 
+# The image ships no package databases on purpose -- an index is stale the moment
+# it is downloaded -- so the setup phase has to sync before it can resolve a
+# single name. Without this every package is "target not found" and the whole
+# install fails at the first step, which is exactly what an imported image did.
+sync_line=$(grep -n 'run_logged .*wsl/pacman-sync.sh' "$setup_steps" | cut -d: -f1)
+packages_line=$(grep -n 'run_logged .*wsl/packages.sh' "$setup_steps" | cut -d: -f1)
+[[ -n $sync_line && -n $packages_line ]] && (( sync_line < packages_line )) ||
+  fail "the setup phase syncs the package databases before it installs anything"
+grep -q 'rm -rf /var/lib/pacman/sync' "$ROOT/bin/omarchy-dev-wsl-build" ||
+  fail "the build is still what empties them, which is why the sync has to exist"
+pass "the setup phase syncs the databases the image deliberately does not carry"
+
+# An image may be months old when it is imported, so its packages are too. The
+# keyring has to be refreshed before anything is verified against it, and the
+# image upgraded before current packages are installed alongside its old ones.
+grep -q 'omarchy-update-keyring' "$ROOT/install/wsl/pacman-sync.sh" ||
+  fail "the sync refreshes the keyring before downloading against it"
+grep -q 'OMARCHY_UPDATE_PACMAN=1 pacman -Syu' "$ROOT/install/wsl/pacman-sync.sh" ||
+  fail "the sync upgrades the image before installing alongside it"
+pass "an old image refreshes its keys and upgrades itself before installing"
+
 # The tarball is only small because the desktop is not in it. These are the
 # steps that install or build it, and every one belongs to the setup phase.
 for heavy in packages neatvnc; do

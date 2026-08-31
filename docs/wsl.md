@@ -33,11 +33,13 @@ The image used to carry the whole desktop, and gzipped to around 5 GB — more t
 | Phase | Runs | List | Does |
 | --- | --- | --- | --- |
 | `--image` | `omarchy dev wsl build`, in the container | `install/wsl/all-image.sh` | `NoExtract` directives, the bootstrap packages, the locale, and the metadata Windows reads at import time |
-| `--setup` | `/etc/oobe.sh`, on the machine that imported the image | `install/wsl/all-setup.sh` | Everything else: the package set, the neatvnc build, and every configuration step |
+| `--setup` | `/etc/oobe.sh`, on the machine that imported the image | `install/wsl/all-setup.sh` | Syncing the package databases, then everything else: the package set, the neatvnc build, and every configuration step |
 
 With neither flag both run in order, which is what an in-place re-apply on an installed machine wants; `install/wsl/all.sh` is that pair.
 
 Every step in `install/wsl/` was already idempotent — `install/wsl/hypr.sh` and `install/wsl/groups.sh` check before appending, `install/wsl/idle.sh` and `install/wsl/services.sh` write the same thing every time — so the split needed no change to any of them, and a setup phase that fails halfway can simply be run again. That matters, because the phase runs over the network on a machine Omarchy does not control.
+
+The setup phase begins with `install/wsl/pacman-sync.sh`, which is not optional. The image ships with `/var/lib/pacman/sync` emptied — an index is stale the moment the tarball is downloaded — so until it has synced, every name in `install/wsl/packages.sh` resolves to `error: target not found` and the install fails at its first step. It refreshes the keyring first, because an image months old carries an `archlinux-keyring` that may predate a maintainer key rotation, and then upgrades what the image already carries: installing current packages alongside build-time ones is the partial upgrade Arch warns about, and an image is the one case where that is guaranteed rather than hypothetical.
 
 `install/wsl/image.sh` writes `/var/lib/omarchy/provisioning/pending`, the same marker `install/provisioning/omarchy-provision-owner.service` gates on for a deferred-provisioning install on hardware, and `/etc/oobe.sh` clears it only when both the setup phase and `omarchy-provision-user` succeeded. While it is there, `/etc/profile.d/omarchy-wsl-setup.sh` offers to finish setup on the next interactive login — WSL runs the OOBE command exactly once, and it must exit 0 whatever happened, so without that a first run interrupted by a network drop would need the image re-imported.
 
