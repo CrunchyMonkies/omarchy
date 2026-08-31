@@ -42,3 +42,31 @@ wsl_masked_units=(
 for unit in "${wsl_masked_units[@]}"; do
   systemctl --root=/ mask "$unit"
 done
+
+# Everything above writes symlinks and takes effect on the next boot. That was
+# all this step ever needed while it ran in the build container, where there is
+# no next boot to wait for -- the image had not started yet.
+#
+# It runs on a booted machine now: /etc/oobe.sh calls it during the first run.
+# So the enable above leaves seatd enabled but not running, and startx in that
+# same session finds no /run/seatd.sock, libseat has nothing to talk to and
+# Hyprland dies at "CBackend::create() failed!". Telling someone their brand new
+# desktop needs a restart first is not an answer, so start it here.
+#
+# /run/systemd/system is systemd's own marker for "I am the init system and I am
+# running" -- the same condition the --root=/ above works around the absence of.
+if [[ -d /run/systemd/system ]]; then
+  # The unit tree changed underneath the running manager, which has no idea.
+  systemctl daemon-reload
+
+  systemctl start seatd.service
+
+  # A masked unit already started earlier in this boot keeps running; masking
+  # only stops the next start. Stop the ones that are up, so the first run
+  # leaves the machine in the state a reboot would.
+  for unit in sddm.service "${wsl_masked_units[@]}"; do
+    if systemctl is-active --quiet "$unit"; then
+      systemctl stop "$unit" || true
+    fi
+  done
+fi

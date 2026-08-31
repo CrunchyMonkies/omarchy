@@ -43,6 +43,18 @@ grep -q 'systemctl --root=/ enable seatd.service' "$ROOT/install/wsl/services.sh
   fail "install/wsl/services.sh enables seatd.service"
 pass "install/wsl/services.sh enables seatd.service"
 
+# Enabling is not starting. This step used to run only in the build container,
+# where the next boot did the starting; it runs on a booted machine now, and a
+# first run that ends with seatd enabled but not running gives a desktop that
+# dies at "CBackend::create() failed!" until the distribution is restarted.
+grep -q 'systemctl start seatd.service' "$ROOT/install/wsl/services.sh" ||
+  fail "install/wsl/services.sh starts seatd when there is a systemd to start it"
+grep -q '\[\[ -d /run/systemd/system \]\]' "$ROOT/install/wsl/services.sh" ||
+  fail "it only tries that when systemd is actually running, not in the container"
+grep -q 'systemctl daemon-reload' "$ROOT/install/wsl/services.sh" ||
+  fail "the running manager is told the unit tree changed under it"
+pass "the setup phase starts seatd rather than leaving it for a restart"
+
 # There is no display to scan out to, so the session is only reachable through
 # wayvnc and a viewer. Both are WSL-only additions the base manifest never names.
 for package in seatd wayvnc tigervnc; do
