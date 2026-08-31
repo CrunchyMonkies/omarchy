@@ -15,6 +15,8 @@
 
 # The tag comes from the repository, not from what is installed: once this has
 # run, the installed version carries our own pkgrel and names no upstream tag.
+source "$OMARCHY_INSTALL/helpers/transient-packages.sh"
+
 neatvnc_version=$(pacman -Si neatvnc | awk '/^Version/ { print $3; exit }')
 neatvnc_patch="$OMARCHY_PATH/install/wsl/patches/neatvnc-announce-desktop-size.patch"
 build_dir=/tmp/omarchy-neatvnc
@@ -30,10 +32,12 @@ build_user=omarchy-build
 # OPTIONS) and then again inside prepare() (no patch). meson and ninja are
 # neatvnc's, and base-devel does not include them.
 #
-# It stays in the image afterwards, as meson and ninja already did. Removing it
-# would have to unpick a dependency tree that now overlaps the base manifest --
-# fakeroot is in both.
-pacman -S --needed --noconfirm base-devel meson ninja >/dev/null
+# None of it is wanted afterwards, and it is the better part of a gigabyte, so
+# it is taken back out below. The dependency overlap with the base manifest is
+# not a problem the way it once was: install/wsl/packages.sh runs first, so
+# everything Omarchy wants -- fakeroot included -- is already installed
+# explicitly and is not part of what this step added.
+omarchy_transient_packages_begin base-devel meson ninja
 
 useradd --system --create-home --home-dir /var/tmp/omarchy-build "$build_user"
 
@@ -88,3 +92,12 @@ pacman -U --noconfirm "$build_dir"/neatvnc/neatvnc-*.pkg.tar.zst >/dev/null
 
 userdel --remove "$build_user" >/dev/null 2>&1
 rm -rf "$build_dir"
+
+omarchy_transient_packages_end
+
+# The prune removes dependencies nothing needs any more, and the session is the
+# thing that would notice a mistake there long after the build looked fine.
+for package in neatvnc wayvnc hyprland; do
+  pacman -Q "$package" >/dev/null 2>&1 ||
+    { echo "Error: removing the build toolchain took $package with it." >&2; exit 1; }
+done
