@@ -54,34 +54,6 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: Set aside the tests that need a maintainer's machine
-        # Three of the 212 shell tests assert against things a clean runner
-        # cannot have, so they fail here for reasons that say nothing about the
-        # commit. Everything else still runs, and any other failure still fails
-        # the gate.
-        #
-        #   unowned-system-paths, snapper, config - read PKGBUILDs from the
-        #     sibling omarchy-pkgs repository, which is not published anywhere
-        #     this runner can reach.
-        #   hw-hybrid-gpu - runs bin/omarchy-hw-hybrid-gpu, which calls
-        #     omarchy-cmd-present as a bare command. That resolves only where
-        #     Omarchy is already installed. Putting the checkout's own bin/ on
-        #     PATH fixes this one and breaks theme-install-guards, which
-        #     deliberately runs without it.
-        #   update-lock - asserts with kill -0 that omarchy-update's sleep
-        #     inhibitor has stopped, immediately after waiting on the update.
-        #     kill -0 succeeds against a zombie, so the assertion depends on
-        #     the stub's child being reaped first, and a loaded runner widens
-        #     that window. It passes reliably on a development machine.
-        run: |
-          mkdir -p "$RUNNER_TEMP/needs-a-maintainer-machine"
-          mv test/shell.d/unowned-system-paths-test.sh \
-             test/shell.d/snapper-test.sh \
-             test/shell.d/config-test.sh \
-             test/shell.d/hw-hybrid-gpu-test.sh \
-             test/shell.d/update-lock-test.sh \
-             "$RUNNER_TEMP/needs-a-maintainer-machine/"
-
       - name: Run the CLI and shell suites
         # As an unprivileged user, because a container job is root by default
         # and root ignores the permission bits several tests are asserting on:
