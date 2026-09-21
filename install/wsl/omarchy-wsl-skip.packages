@@ -17,9 +17,7 @@ bluez-utils
 
 # Printing and mDNS belong to Windows on this machine.
 cups
-cups-browsed
 cups-filters
-cups-pdf
 system-config-printer
 avahi
 nss-mdns
